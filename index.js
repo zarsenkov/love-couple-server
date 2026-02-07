@@ -140,17 +140,28 @@ socket.on('disconnecting', () => {
 // ФУНКЦИЯ УДАЛЕНИЯ ИГРОКА
 function removePlayer(roomId, playerName) {
     if (!rooms[roomId]) return;
-    rooms[roomId].players = rooms[roomId].players.filter(p => p.name !== playerName);
     
-    if (rooms[roomId].players.length === 0) {
-        delete rooms[roomId];
+    const room = rooms[roomId];
+    // Удаляем игрока
+    room.players = room.players.filter(p => p.name !== playerName);
+    
+    if (room.players.length === 0) {
+        delete rooms[roomId]; // Полное удаление комнаты из памяти
     } else {
+        // Если удалили игрока, чей был ход — сбрасываем индекс на 0
+        if (room.activePlayerIndex >= room.players.length) {
+            room.activePlayerIndex = 0;
+        }
+
         io.to(roomId).emit('update-lobby', { 
-            players: rooms[roomId].players, 
-            gameStarted: rooms[roomId].gameStarted,
-            gameType: rooms[roomId].gameType
+            players: room.players, 
+            gameStarted: room.gameStarted,
+            gameType: room.gameType
         });
         io.to(roomId).emit('hide-overlay');
+
+        // Если игра идет, переотправляем ход, чтобы обновить экраны
+        if (room.gameStarted) sendTurn(roomId);
     }
 }
 // ФУНКЦИЯ ОТПРАВКИ ХОДА
