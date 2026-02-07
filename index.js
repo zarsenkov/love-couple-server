@@ -12,7 +12,8 @@ const rooms = {};
 const disconnectTimers = {};
 
 io.on('connection', (socket) => {
-    socket.on('join-room', ({ roomId, playerName }) => {
+    // ТЕПЕРЬ ПРИНИМАЕМ gameType ('zine' или 'whoami')
+    socket.on('join-room', ({ roomId, playerName, gameType }) => {
         socket.join(roomId);
         
         if (!rooms[roomId]) {
@@ -21,7 +22,8 @@ io.on('connection', (socket) => {
                 activePlayerIndex: 0,
                 gameStarted: false,
                 currentRound: 1,
-                maxRounds: 5
+                maxRounds: 5,
+                gameType: gameType || 'zine' // Сохраняем тип игры
             };
         }
 
@@ -42,14 +44,19 @@ io.on('connection', (socket) => {
         io.to(roomId).emit('update-lobby', {
             players: room.players,
             gameStarted: room.gameStarted,
-            maxRounds: room.maxRounds
+            maxRounds: room.maxRounds,
+            gameType: room.gameType // Отправляем тип игры обратно
         });
     });
 
     socket.on('set-rounds', ({ roomId, rounds }) => {
         if (rooms[roomId]) {
             rooms[roomId].maxRounds = Math.min(Math.max(parseInt(rounds), 1), 10);
-            io.to(roomId).emit('update-lobby', { players: rooms[roomId].players, maxRounds: rooms[roomId].maxRounds });
+            io.to(roomId).emit('update-lobby', { 
+                players: rooms[roomId].players, 
+                maxRounds: rooms[roomId].maxRounds,
+                gameType: rooms[roomId].gameType 
+            });
         }
     });
 
@@ -68,6 +75,7 @@ io.on('connection', (socket) => {
         const room = rooms[roomId];
         if (!room) return;
 
+        // Начисляем очки текущему игроку, если угадали
         if (wasGuessed) {
             room.players[room.activePlayerIndex].score++;
         }
@@ -87,6 +95,7 @@ io.on('connection', (socket) => {
     });
 
     socket.on('game-action', ({ roomId, data }) => {
+        // Просто транслируем игровые события (карточки, слова) всем в комнате
         io.to(roomId).emit('game-event', data);
     });
 
@@ -121,9 +130,9 @@ function removePlayer(roomId, playerName) {
     } else {
         io.to(roomId).emit('update-lobby', { 
             players: rooms[roomId].players, 
-            gameStarted: rooms[roomId].gameStarted 
+            gameStarted: rooms[roomId].gameStarted,
+            gameType: rooms[roomId].gameType
         });
-        // Если вылетел текущий ходящий
         io.to(roomId).emit('hide-overlay');
     }
 }
@@ -136,7 +145,8 @@ function sendTurn(roomId) {
             activePlayerId: active.id,
             activePlayerName: active.name,
             currentRound: room.currentRound,
-            maxRounds: room.maxRounds
+            maxRounds: room.maxRounds,
+            gameType: room.gameType
         });
     }
 }
