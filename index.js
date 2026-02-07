@@ -1,23 +1,37 @@
+const express = require('express');
+const http = require('http');
+const { Server } = require("socket.io");
+const cors = require('cors');
+
+const app = express();
+app.use(cors());
+
+const server = http.createServer(app);
+const io = new Server(server, {
+    cors: { origin: "*" }
+});
+
 const rooms = {};
 
 io.on('connection', (socket) => {
+    console.log('User connected:', socket.id);
+
     socket.on('join-room', ({ roomId, playerName }) => {
         socket.join(roomId);
         
         if (!rooms[roomId]) {
             rooms[roomId] = {
-                players: [], // Список объектов {id, name}
+                players: [],
                 activePlayerIndex: 0,
                 gameStarted: false
             };
         }
         
-        // Добавляем игрока, если его еще нет
+        // Добавляем игрока
         if (!rooms[roomId].players.find(p => p.id === socket.id)) {
             rooms[roomId].players.push({ id: socket.id, name: playerName });
         }
 
-        // Рассылаем всем в комнате обновленный список игроков
         io.to(roomId).emit('update-lobby', {
             players: rooms[roomId].players,
             gameStarted: rooms[roomId].gameStarted
@@ -25,24 +39,42 @@ io.on('connection', (socket) => {
     });
 
     socket.on('start-game', (roomId) => {
-        if (rooms[roomId]) {
-            rooms[roomId].gameStarted = true;
-            rooms[roomId].activePlayerIndex = 0;
-            const activeId = rooms[roomId].players[0].id;
-            io.to(roomId).emit('game-started', { activePlayerId: activeId });
+        const room = rooms[roomId];
+        if (room && room.players.length > 0) {
+            room.gameStarted = true;
+            room.activePlayerIndex = 0;
+            const active = room.players[0];
+            io.to(roomId).emit('game-started', { 
+                activePlayerId: active.id, 
+                activePlayerName: active.name 
+            });
         }
+    });
+
+    socket.on('game-action', ({ roomId, data }) => {
+        io.to(roomId).emit('game-event', data);
     });
 
     socket.on('switch-turn', (roomId) => {
         const room = rooms[roomId];
-        if (room) {
+        if (room && room.players.length > 0) {
             room.activePlayerIndex = (room.activePlayerIndex + 1) % room.players.length;
-            const nextPlayerId = room.players[room.activePlayerIndex].id;
-            io.to(roomId).emit('turn-changed', { activePlayerId: nextPlayerId });
+            const next = room.players[room.activePlayerIndex];
+            io.to(roomId).emit('turn-changed', { 
+                activePlayerId: next.id, 
+                activePlayerName: next.name 
+            });
         }
     });
 
     socket.on('disconnect', () => {
-        // Логика удаления игрока из комнаты при выходе (по желанию)
+        console.log('User disconnected');
+        // Здесь можно добавить логику удаления игрока из комнаты
     });
+});
+
+// ПОРТ: Amvera использует 80 по умолчанию
+const PORT = process.env.PORT || 80;
+server.listen(PORT, '0.0.0.0', () => {
+    console.log(`Server is running on port ${PORT}`);
 });
