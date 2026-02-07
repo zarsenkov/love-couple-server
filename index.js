@@ -86,6 +86,30 @@ io.on('connection', (socket) => {
         }
     });
 
+    // Когда кто-то из друзей нажал "Угадал!"
+    socket.on('correct-answer', (roomId) => {
+        const room = rooms[roomId];
+        if (room && room.gameStarted) {
+            // Очко идет тому, кто сейчас стоит с телефоном у лба
+            room.players[room.activePlayerIndex].score++;
+            
+            // Обновляем лобби у всех
+            io.to(roomId).emit('update-lobby', { 
+                players: room.players, 
+                gameStarted: true,
+                gameType: room.gameType
+            });
+            
+            // Просим угадывающего сменить слово
+            io.to(roomId).emit('game-event', { type: 'NEXT_WORD' });
+        }
+    });
+
+    socket.on('skip-answer', (roomId) => {
+        // Просто просим сменить слово без очков
+        io.to(roomId).emit('game-event', { type: 'NEXT_WORD' });
+    });
+
 // 5. СМЕНА ХОДА
     socket.on('switch-turn', (roomId, wasGuessed) => {
         const room = rooms[roomId];
