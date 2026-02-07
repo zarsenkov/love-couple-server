@@ -1,46 +1,48 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require("socket.io");
-const cors = require('cors');
-
-const app = express();
-app.use(cors());
-const httpServer = http.createServer(app);
-const io = new Server(httpServer, { cors: { origin: "*" } });
-
 const rooms = {};
 
 io.on('connection', (socket) => {
-    socket.on('join-room', (roomId) => {
+    socket.on('join-room', ({ roomId, playerName }) => {
         socket.join(roomId);
+        
         if (!rooms[roomId]) {
-            rooms[roomId] = { activePlayer: socket.id, currentWord: null, currentLetter: null };
+            rooms[roomId] = {
+                players: [], // Список объектов {id, name}
+                activePlayerIndex: 0,
+                gameStarted: false
+            };
         }
-        socket.emit('init-state', {
-            isMyTurn: rooms[roomId].activePlayer === socket.id,
-            currentWord: rooms[roomId].currentWord,
-            currentLetter: rooms[roomId].currentLetter
+        
+        // Добавляем игрока, если его еще нет
+        if (!rooms[roomId].players.find(p => p.id === socket.id)) {
+            rooms[roomId].players.push({ id: socket.id, name: playerName });
+        }
+
+        // Рассылаем всем в комнате обновленный список игроков
+        io.to(roomId).emit('update-lobby', {
+            players: rooms[roomId].players,
+            gameStarted: rooms[roomId].gameStarted
         });
     });
 
-    socket.on('game-action', ({ roomId, data }) => {
-        if (data.type === 'SYNC_CARD') {
-            rooms[roomId].currentWord = data.word;
-            rooms[roomId].currentLetter = data.letter;
+    socket.on('start-game', (roomId) => {
+        if (rooms[roomId]) {
+            rooms[roomId].gameStarted = true;
+            rooms[roomId].activePlayerIndex = 0;
+            const activeId = rooms[roomId].players[0].id;
+            io.to(roomId).emit('game-started', { activePlayerId: activeId });
         }
-        io.to(roomId).emit('game-event', data);
     });
 
     socket.on('switch-turn', (roomId) => {
-        const clients = Array.from(io.sockets.adapter.rooms.get(roomId) || []);
-        if (clients.length > 1) {
-            const room = rooms[roomId];
-            const currentIndex = clients.indexOf(room.activePlayer);
-            const nextIndex = (currentIndex + 1) % clients.length;
-            room.activePlayer = clients[nextIndex];
-            io.to(roomId).emit('turn-changed', { activePlayer: room.activePlayer });
+        const room = rooms[roomId];
+        if (room) {
+            room.activePlayerIndex = (room.activePlayerIndex + 1) % room.players.length;
+            const nextPlayerId = room.players[room.activePlayerIndex].id;
+            io.to(roomId).emit('turn-changed', { activePlayerId: nextPlayerId });
         }
     });
-});
 
-httpServer.listen(80, '0.0.0.0');
+    socket.on('disconnect', () => {
+        // Логика удаления игрока из комнаты при выходе (по желанию)
+    });
+});
