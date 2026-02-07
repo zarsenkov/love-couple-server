@@ -5,27 +5,17 @@ const cors = require('cors');
 
 const app = express();
 app.use(cors());
-
 const httpServer = http.createServer(app);
-const io = new Server(httpServer, {
-    cors: { origin: "*", methods: ["GET", "POST"] }
-});
+const io = new Server(httpServer, { cors: { origin: "*" } });
 
 const rooms = {};
 
 io.on('connection', (socket) => {
     socket.on('join-room', (roomId) => {
         socket.join(roomId);
-        
         if (!rooms[roomId]) {
-            rooms[roomId] = {
-                activePlayer: socket.id,
-                currentWord: null,
-                currentLetter: null
-            };
+            rooms[roomId] = { activePlayer: socket.id, currentWord: null, currentLetter: null };
         }
-        
-        // Отправляем игроку инфо: он ведущий или угадывающий
         socket.emit('init-state', {
             isMyTurn: rooms[roomId].activePlayer === socket.id,
             currentWord: rooms[roomId].currentWord,
@@ -48,17 +38,9 @@ io.on('connection', (socket) => {
             const currentIndex = clients.indexOf(room.activePlayer);
             const nextIndex = (currentIndex + 1) % clients.length;
             room.activePlayer = clients[nextIndex];
-            
-            io.to(roomId).emit('turn-changed', {
-                activePlayer: room.activePlayer
-            });
+            io.to(roomId).emit('turn-changed', { activePlayer: room.activePlayer });
         }
-    });
-
-    socket.on('disconnect', () => {
-        // Логика очистки комнат при желании
     });
 });
 
-app.get('/', (req, res) => res.send('Server is LIVE on port 80'));
 httpServer.listen(80, '0.0.0.0');
