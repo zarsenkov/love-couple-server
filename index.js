@@ -71,6 +71,21 @@ io.on('connection', (socket) => {
         }
     });
 
+    // НАЧИСЛЕНИЕ ОЧКА (для игры "Кто я?")
+    socket.on('add-point', (roomId) => {
+        const room = rooms[roomId];
+        if (room && room.gameStarted) {
+            // Очко получает тот, кто сейчас УГАДЫВАЕТ
+            room.players[room.activePlayerIndex].score++;
+            // Рассылаем обновленные очки всем
+            io.to(roomId).emit('update-lobby', { 
+                players: room.players, 
+                gameStarted: true,
+                gameType: room.gameType 
+            });
+        }
+    });
+
 // 5. СМЕНА ХОДА
     socket.on('switch-turn', (roomId, wasGuessed) => {
         const room = rooms[roomId];
@@ -104,7 +119,7 @@ io.on('connection', (socket) => {
         removePlayer(roomId, playerName);
     });
 // 8. ОБРАБОТКА ВЫХОДА
-    socket.on('disconnecting', () => {
+socket.on('disconnecting', () => {
         for (const roomId of socket.rooms) {
             const room = rooms[roomId];
             if (!room) continue;
@@ -114,9 +129,10 @@ io.on('connection', (socket) => {
                 player.online = false;
                 io.to(roomId).emit('player-offline', { name: player.name });
 
+                // Если через 15 сек не вернулся — удаляем (хватит, чтобы переподключиться)
                 disconnectTimers[socket.id] = setTimeout(() => {
                     removePlayer(roomId, player.name);
-                }, 60000);
+                }, 15000);
             }
         }
     });
