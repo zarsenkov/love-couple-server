@@ -12,7 +12,7 @@ const rooms = {};
 const disconnectTimers = {};
 
 io.on('connection', (socket) => {
-    // ТЕПЕРЬ ПРИНИМАЕМ gameType ('zine' или 'whoami')
+    // 1. ВХОД В КОМНАТУ
     socket.on('join-room', ({ roomId, playerName, gameType }) => {
         socket.join(roomId);
         
@@ -40,7 +40,7 @@ io.on('connection', (socket) => {
         } else {
             room.players.push({ id: socket.id, name: playerName, online: true, score: 0 });
         }
-
+// 2. НАСТРОЙКА РАУНДОВ
         io.to(roomId).emit('update-lobby', {
             players: room.players,
             gameStarted: room.gameStarted,
@@ -48,7 +48,7 @@ io.on('connection', (socket) => {
             gameType: room.gameType // Отправляем тип игры обратно
         });
     });
-
+// 3. СТАРТ ИГРЫ
     socket.on('set-rounds', ({ roomId, rounds }) => {
         if (rooms[roomId]) {
             rooms[roomId].maxRounds = Math.min(Math.max(parseInt(rounds), 1), 10);
@@ -59,7 +59,7 @@ io.on('connection', (socket) => {
             });
         }
     });
-
+// 4. ДОБАВЛЕНИЕ ОЧКА (БЕЗ СМЕНЫ ХОДА) - для "Кто я?"
     socket.on('start-game', (roomId) => {
         const room = rooms[roomId];
         if (room && room.players.length > 0) {
@@ -71,12 +71,13 @@ io.on('connection', (socket) => {
         }
     });
 
+// 5. СМЕНА ХОДА
     socket.on('switch-turn', (roomId, wasGuessed) => {
         const room = rooms[roomId];
         if (!room) return;
 
-        // Начисляем очки текущему игроку, если угадали
-        if (wasGuessed) {
+        // Если в другой игре (ZINE) нужно давать очко только в конце
+        if (wasGuessed && room.gameType === 'zine') {
             room.players[room.activePlayerIndex].score++;
         }
 
@@ -93,16 +94,16 @@ io.on('connection', (socket) => {
             sendTurn(roomId);
         }
     });
-
+// 6. ПЕРЕДАЧА СОБЫТИЙ (Слова, карточки)
     socket.on('game-action', ({ roomId, data }) => {
         // Просто транслируем игровые события (карточки, слова) всем в комнате
         io.to(roomId).emit('game-event', data);
     });
-
+// 7. КИК ИГРОКА (Исправлено)
     socket.on('kick-player', (roomId, playerName) => {
         removePlayer(roomId, playerName);
     });
-
+// 8. ОБРАБОТКА ВЫХОДА
     socket.on('disconnecting', () => {
         for (const roomId of socket.rooms) {
             const room = rooms[roomId];
@@ -120,7 +121,7 @@ io.on('connection', (socket) => {
         }
     });
 });
-
+// ФУНКЦИЯ УДАЛЕНИЯ ИГРОКА
 function removePlayer(roomId, playerName) {
     if (!rooms[roomId]) return;
     rooms[roomId].players = rooms[roomId].players.filter(p => p.name !== playerName);
@@ -136,7 +137,7 @@ function removePlayer(roomId, playerName) {
         io.to(roomId).emit('hide-overlay');
     }
 }
-
+// ФУНКЦИЯ ОТПРАВКИ ХОДА
 function sendTurn(roomId) {
     const room = rooms[roomId];
     const active = room.players[room.activePlayerIndex];
