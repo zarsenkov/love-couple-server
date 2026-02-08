@@ -9,6 +9,8 @@ const slovoSocket = require('./games/slovo/socket');
 const whoamiSocket = require('./games/whoami/socket');
 const aliasSocket = require('./games/alias/socket');
 const spySocket = require('./games/spy/socket');
+const mafiaSocket = require('./games/mafia/socket');
+const quizSocket = require('./games/quiz/socket');
 
 const app = express();
 
@@ -36,6 +38,8 @@ io.on('connection', (socket) => {
     whoamiSocket(io, socket);
     aliasSocket(io, socket);
     spySocket(io, socket);
+    mafiaSocket(io, socket);
+    quizSocket(io, socket);
 
     socket.on('disconnect', () => {
         console.log('Пользователь отключился:', socket.id);
