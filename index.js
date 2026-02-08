@@ -24,8 +24,12 @@ io.on('connection', (socket) => {
             };
         }
         const room = rooms[roomId];
-        room.players.push({ id: socket.id, name: playerName, score: 0 });
-        io.to(roomId).emit('update-lobby', { players: room.players });
+        // Если игрок с таким именем уже есть, обновляем ID, если нет - добавляем
+        const existing = room.players.find(p => p.name === playerName);
+        if (existing) { existing.id = socket.id; } 
+        else { room.players.push({ id: socket.id, name: playerName, score: 0 }); }
+
+        io.to(roomId).emit('update-lobby', { players: room.players, gameStarted: room.gameStarted });
     });
 
     socket.on('start-game', ({ roomId, maxRounds, timer }) => {
@@ -34,6 +38,8 @@ io.on('connection', (socket) => {
             room.gameStarted = true;
             room.maxRounds = parseInt(maxRounds);
             room.timerVal = parseInt(timer);
+            room.currentRound = 1;
+            room.activePlayerIndex = 0;
             sendTurn(roomId);
         }
     });
@@ -43,6 +49,7 @@ io.on('connection', (socket) => {
         if (room) {
             const player = room.players.find(p => p.name === targetName);
             if (player) player.score++;
+            io.to(roomId).emit('update-lobby', { players: room.players, gameStarted: true });
         }
     });
 
@@ -66,14 +73,11 @@ io.on('connection', (socket) => {
     socket.on('game-action', ({ roomId, data }) => {
         io.to(roomId).emit('game-event', data);
     });
-
-    socket.on('disconnect', () => {
-        // Простая логика: если вышел — просто забыли (как просил)
-    });
 });
 
 function sendTurn(roomId) {
     const room = rooms[roomId];
+    if (!room || !room.players[room.activePlayerIndex]) return;
     const active = room.players[room.activePlayerIndex];
     io.to(roomId).emit('turn-changed', {
         activePlayerId: active.id,
