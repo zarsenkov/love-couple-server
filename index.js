@@ -9,7 +9,6 @@ const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
 const rooms = {};
-const disconnectTimers = {};
 
 io.on('connection', (socket) => {
     socket.on('join-room', ({ roomId, playerName }) => {
@@ -20,50 +19,44 @@ io.on('connection', (socket) => {
                 activePlayerIndex: 0,
                 gameStarted: false,
                 currentRound: 1,
-                maxRounds: 3
+                maxRounds: 3,
+                timerVal: 60
             };
         }
         const room = rooms[roomId];
-        const existing = room.players.find(p => p.name === playerName);
-        if (existing) {
-            existing.id = socket.id;
-            existing.online = true;
-            if (disconnectTimers[socket.id]) clearTimeout(disconnectTimers[socket.id]);
-        } else {
-            room.players.push({ id: socket.id, name: playerName, online: true, score: 0 });
-        }
-        io.to(roomId).emit('update-lobby', { players: room.players, gameStarted: room.gameStarted });
-        io.to(roomId).emit('hide-overlay'); // Скрываем оверлеи при входе нового/старого игрока
+        room.players.push({ id: socket.id, name: playerName, score: 0 });
+        io.to(roomId).emit('update-lobby', { players: room.players });
     });
 
-    socket.on('start-game', (roomId) => {
+    socket.on('start-game', ({ roomId, maxRounds, timer }) => {
         const room = rooms[roomId];
-        if (room && room.players.length > 0) {
+        if (room) {
             room.gameStarted = true;
-            room.currentRound = 1;
-            room.activePlayerIndex = 0;
+            room.maxRounds = parseInt(maxRounds);
+            room.timerVal = parseInt(timer);
             sendTurn(roomId);
         }
     });
 
-    socket.on('add-point', (roomId) => {
+    socket.on('add-point-to', ({ roomId, targetName }) => {
         const room = rooms[roomId];
-        if (room && room.gameStarted) {
-            room.players[room.activePlayerIndex].score++;
-            io.to(roomId).emit('update-lobby', { players: room.players, gameStarted: true });
+        if (room) {
+            const player = room.players.find(p => p.name === targetName);
+            if (player) player.score++;
         }
     });
 
     socket.on('switch-turn', (roomId) => {
         const room = rooms[roomId];
         if (!room) return;
+        
         room.activePlayerIndex++;
         if (room.activePlayerIndex >= room.players.length) {
             room.activePlayerIndex = 0;
             room.currentRound++;
         }
+
         if (room.currentRound > room.maxRounds) {
-            room.gameStarted = false;
             io.to(roomId).emit('game-over', { players: room.players });
         } else {
             sendTurn(roomId);
@@ -74,42 +67,19 @@ io.on('connection', (socket) => {
         io.to(roomId).emit('game-event', data);
     });
 
-    socket.on('disconnecting', () => {
-        socket.rooms.forEach(roomId => {
-            const room = rooms[roomId];
-            if (room) {
-                const player = room.players.find(p => p.id === socket.id);
-                if (player) {
-                    player.online = false;
-                    io.to(roomId).emit('player-offline', { name: player.name });
-                    disconnectTimers[socket.id] = setTimeout(() => {
-                        removePlayer(roomId, player.name);
-                    }, 10000);
-                }
-            }
-        });
+    socket.on('disconnect', () => {
+        // Простая логика: если вышел — просто забыли (как просил)
     });
 });
 
-function removePlayer(roomId, playerName) {
-    if (!rooms[roomId]) return;
-    rooms[roomId].players = rooms[roomId].players.filter(p => p.name !== playerName);
-    if (rooms[roomId].players.length === 0) {
-        delete rooms[roomId];
-    } else {
-        io.to(roomId).emit('update-lobby', { players: rooms[roomId].players });
-    }
-}
-
 function sendTurn(roomId) {
     const room = rooms[roomId];
-    if (!room || !room.players[room.activePlayerIndex]) return;
     const active = room.players[room.activePlayerIndex];
     io.to(roomId).emit('turn-changed', {
         activePlayerId: active.id,
         activePlayerName: active.name,
-        currentRound: room.currentRound
+        timer: room.timerVal
     });
 }
 
-server.listen(80, () => console.log("Сервер запущен на порту 80"));
+server.listen(80);
