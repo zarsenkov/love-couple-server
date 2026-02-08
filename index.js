@@ -7,6 +7,7 @@ const path = require('path');
 // 1. Импортируем модули логики
 const slovoSocket = require('./games/slovo/socket');
 const whoamiSocket = require('./games/whoami/socket');
+const aliasSocket = require('./games/alias/socket');
 
 const app = express();
 
@@ -32,6 +33,7 @@ io.on('connection', (socket) => {
     // 3. Подключаем логику игр
     slovoSocket(io, socket);
     whoamiSocket(io, socket);
+    aliasSocket(io, socket);
 
     socket.on('disconnect', () => {
         console.log('Пользователь отключился:', socket.id);
