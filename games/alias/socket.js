@@ -1,18 +1,18 @@
-// // Объект для хранения данных комнат
+// // Хранилище всех активных игровых комнат
 const roomsAlias = {};
-// // Объект для хранения интервалов таймеров
+// // Хранилище интервалов таймеров для каждой комнаты
 const aliasIntervals = {};
-// // Список случайных названий команд
+// // Список названий для команд (выбираются случайно)
 const TEAM_NAMES = ["Дерзкие Еноты", "Тайные Агенты", "Крутые Перцы", "Ночные Совы", "Ленивые Панды", "Быстрые Зайцы"];
 
 module.exports = (io, socket) => {
-    
-    // // СОБЫТИЕ: Игрок заходит в комнату
+
+    // // СОБЫТИЕ: Вход в комнату или переподключение
     socket.on('alias-join', ({ roomId, playerName }) => {
         const roomKey = `alias_${roomId}`;
         socket.join(roomKey);
 
-        // // Если комнаты нет — создаем её с начальными данными
+        // // Если комнаты еще нет — создаем структуру
         if (!roomsAlias[roomId]) {
             roomsAlias[roomId] = {
                 players: [],
@@ -20,77 +20,93 @@ module.exports = (io, socket) => {
                 activeIdx: 0,
                 gamePool: [],
                 timerVal: 60,
+                maxRounds: 3,
+                currentRound: 1,
                 currentScore: 0,
                 teams: {
-                    1: { name: TEAM_NAMES[Math.floor(Math.random()*TEAM_NAMES.length)], score: 0 },
-                    2: { name: TEAM_NAMES[Math.floor(Math.random()*TEAM_NAMES.length)], score: 0 }
+                    1: { name: TEAM_NAMES[Math.floor(Math.random() * TEAM_NAMES.length)], score: 0 },
+                    2: { name: TEAM_NAMES[Math.floor(Math.random() * TEAM_NAMES.length)], score: 0 }
                 }
             };
         }
 
         const room = roomsAlias[roomId];
         
-        // // Рандомное распределение в команды (балансировка по количеству)
-        if (!room.players.find(p => p.id === socket.id)) {
+        // // Проверяем, есть ли уже такой игрок (защита от вылета)
+        let player = room.players.find(p => p.id === socket.id || p.name === playerName);
+        
+        if (!player) {
+            // // Распределяем в команду, где меньше людей (балансировка)
             const countT1 = room.players.filter(p => p.team === 1).length;
             const countT2 = room.players.filter(p => p.team === 2).length;
             const assignedTeam = countT1 <= countT2 ? 1 : 2;
 
-            room.players.push({ 
+            player = { 
                 id: socket.id, 
                 name: playerName, 
                 isHost: room.players.length === 0,
                 team: assignedTeam 
-            });
+            };
+            room.players.push(player);
+        } else {
+            // // Если игрок переподключился — обновляем его socket ID
+            player.id = socket.id;
         }
 
-        // // Рассылаем всем обновленные данные лобби
+        // // Отправляем актуальное состояние комнаты всем участникам
         io.to(roomKey).emit('alias-update-lobby', { 
             roomId, 
             players: room.players, 
-            teams: room.teams 
+            teams: room.teams,
+            gameStarted: room.gameStarted 
         });
     });
 
-    // // СОБЫТИЕ: Хост нажимает "Старт"
-    socket.on('alias-start', ({ roomId, words, timer }) => {
+    // // СОБЫТИЕ: Запуск игры хостом
+    socket.on('alias-start', ({ roomId, words, timer, maxRounds }) => {
         const room = roomsAlias[roomId];
         if (room && !room.gameStarted) {
             room.gameStarted = true;
             room.gamePool = words;
             room.timerVal = parseInt(timer) || 60;
+            room.maxRounds = parseInt(maxRounds) || 3;
+            room.currentRound = 1;
             room.activeIdx = 0;
             room.currentScore = 0;
             
-            // // Показываем экран подготовки перед первым раундом
+            // // Запускаем цикл подготовки первого игрока
             sendPrepScreen(io, roomId);
         }
     });
 
-    // // СОБЫТИЕ: Нажатие Угадано/Пропуск
+    // // СОБЫТИЕ: Угадано слово или пропуск
     socket.on('alias-action', ({ roomId, isCorrect }) => {
         const room = roomsAlias[roomId];
         if (room && room.gameStarted) {
+            // // Зачисляем очки за текущий ход
             const points = isCorrect ? 1 : -1;
             room.currentScore += points;
-            
-            // // Обновляем счет в реальном времени
+
+            // // Рассылаем обновление счета в реальном времени
             io.to(`alias_${roomId}`).emit('alias-update-score', { score: room.currentScore });
             
-            // // Даем следующее слово
+            // // Выдаем следующее слово из пула
             sendWordToTeam(io, roomId);
         }
     });
 
-    // // СОБЫТИЕ: Отключение игрока
+    // // СОБЫТИЕ: Отключение (disconnect)
     socket.on('disconnect', () => {
-        // // (Логика удаления игрока и передачи хоста аналогична предыдущей версии)
+        // // В онлайн версии мы не удаляем игрока сразу, чтобы он мог вернуться (30 сек таймаут)
+        // // Здесь можно добавить логику проверки пустой комнаты
     });
 };
 
-// // ФУНКЦИЯ: Показ экрана "Сейчас объясняет..."
+// // ФУНКЦИЯ: Показ экрана подготовки ("Сейчас объясняет...")
 function sendPrepScreen(io, roomId) {
     const room = roomsAlias[roomId];
+    if (!room) return;
+    
     const activePlayer = room.players[room.activeIdx];
     const teamName = room.teams[activePlayer.team].name;
 
@@ -99,14 +115,16 @@ function sendPrepScreen(io, roomId) {
         teamName: teamName
     });
 
-    // // Через 4 секунды начинаем раунд
+    // // Пауза 4 секунды, чтобы игроки приготовились, затем старт таймера
     setTimeout(() => {
-        startTimer(io, roomId);
-        sendWordToTeam(io, roomId);
+        if (room.gameStarted) {
+            startTimer(io, roomId);
+            sendWordToTeam(io, roomId);
+        }
     }, 4000);
 }
 
-// // ФУНКЦИЯ: Отправка слова (с проверкой на команду)
+// // ФУНКЦИЯ: Рассылка слова (только тем, кто в команде)
 function sendWordToTeam(io, roomId) {
     const room = roomsAlias[roomId];
     if (!room || room.gamePool.length === 0) return;
@@ -114,19 +132,19 @@ function sendWordToTeam(io, roomId) {
     const activePlayer = room.players[room.activeIdx];
     const word = room.gamePool.pop();
 
-    // // Каждому игроку шлем персональное сообщение: видит он слово или нет
     room.players.forEach(p => {
         const sameTeam = (p.team === activePlayer.team);
         io.to(p.id).emit('alias-new-turn', {
             activePlayerId: activePlayer.id,
             activePlayerName: activePlayer.name,
+            // // Противники видят название команды вместо слова
             word: sameTeam ? word : `Угадывает команда: ${room.teams[activePlayer.team].name}`,
             isMyTeam: sameTeam
         });
     });
 }
 
-// // ФУНКЦИЯ: Работа серверного таймера
+// // ФУНКЦИЯ: Обратный отсчет раунда
 function startTimer(io, roomId) {
     const room = roomsAlias[roomId];
     let timeLeft = room.timerVal;
@@ -144,22 +162,48 @@ function startTimer(io, roomId) {
     }, 1000);
 }
 
-// // ФУНКЦИЯ: Завершение раунда
+// // ФУНКЦИЯ: Завершение хода игрока и проверка конца игры
 function handleTurnEnd(io, roomId) {
     const room = roomsAlias[roomId];
-    if (room) {
-        io.to(`alias_${roomId}`).emit('alias-turn-ended', { 
-            prevPlayer: room.players[room.activeIdx].name,
-            scoreGot: room.currentScore
-        });
+    if (!room) return;
 
-        // // Переход к следующему игроку в массиве
-        room.activeIdx = (room.activeIdx + 1) % room.players.length;
-        room.currentScore = 0;
+    // // Добавляем очки раунда в общую копилку команды
+    const activePlayer = room.players[room.activeIdx];
+    room.teams[activePlayer.team].score += room.currentScore;
 
-        // // Снова заставка подготовки через паузу
-        setTimeout(() => {
-            if (room.gameStarted) sendPrepScreen(io, roomId);
-        }, 3000);
+    // // Оповещаем всех об окончании хода
+    io.to(`alias_${roomId}`).emit('alias-turn-ended', { 
+        prevPlayer: activePlayer.name,
+        scoreGot: room.currentScore
+    });
+
+    // // Если это был последний игрок в круге — проверяем раунды
+    if (room.activeIdx === room.players.length - 1) {
+        if (room.currentRound >= room.maxRounds) {
+            // // ФИНАЛ ИГРЫ: определяем победителя
+            const t1 = room.teams[1];
+            const t2 = room.teams[2];
+            let winner = "Ничья!";
+            if (t1.score > t2.score) winner = t1.name;
+            else if (t2.score > t1.score) winner = t2.name;
+
+            io.to(`alias_${roomId}`).emit('alias-game-over', {
+                winner,
+                team1Name: t1.name, team1Score: t1.score,
+                team2Name: t2.name, team2Score: t2.score
+            });
+            room.gameStarted = false;
+            return;
+        }
+        room.currentRound++; // // Переходим к следующему кругу раундов
     }
+
+    // // Переключаем на следующего игрока
+    room.activeIdx = (room.activeIdx + 1) % room.players.length;
+    room.currentScore = 0;
+
+    // // Через паузу показываем экран подготовки следующего игрока
+    setTimeout(() => {
+        if (room.gameStarted) sendPrepScreen(io, roomId);
+    }, 3000);
 }
