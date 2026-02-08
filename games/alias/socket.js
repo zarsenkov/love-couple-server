@@ -1,120 +1,150 @@
-// // Хранилище игровых комнат
-const aliasRooms = {};
-// // Хранилище для интервалов таймера (чтобы можно было их очищать)
-const aliasIntervals = {};
+// Подключаем зависимости
+const express = require('express');
+const http = require('http');
+const { Server } = require('socket.io');
+const path = require('path');
 
-module.exports = (io, socket) => {
-    // // 1. Присоединение к комнате
-    socket.on('alias-join', ({ roomId, playerName }) => {
-        const roomKey = `alias_${roomId}`;
-        socket.join(roomKey);
+const app = express();
+const server = http.createServer(app);
+const io = new Server(server);
 
-        if (!aliasRooms[roomId]) {
-            aliasRooms[roomId] = {
-                players: [],
-                gameStarted: false,
-                activeIdx: 0,
-                currentScore: 0,
-                maxRounds: 3,
-                currentRound: 1,
-                teams: { 1: { score: 0 }, 2: { score: 0 } }
-            };
+// Раздаем статику (html, css, js) из папки public
+app.use(express.static(path.join(__dirname, 'public')));
+
+// --- КОНФИГУРАЦИЯ ---
+const PORT = process.env.PORT || 3000;
+const ALIAS_WORDS = [
+    "Яблоко", "Космос", "Программист", "Сервер", "Кот", "Небоскреб", 
+    "Машина", "Футбол", "Пицца", "Интернет", "Робот", "Банан", 
+    "Гитара", "Школа", "Зомби", "Бэтмен", "Кроссовки", "Лампочка"
+];
+
+// --- ХРАНИЛИЩЕ ДАННЫХ ---
+// rooms = { roomId: { players: [], state: 'lobby', settings: {}, gameData: {} } }
+const rooms = {};
+
+io.on('connection', (socket) => {
+    console.log('User connected:', socket.id);
+
+    // 1. Создание комнаты
+    socket.on('create_room', (playerName) => {
+        const roomId = Math.random().toString(36).substring(2, 7).toUpperCase();
+        rooms[roomId] = {
+            id: roomId,
+            players: [{ id: socket.id, name: playerName, team: 'A', score: 0 }],
+            state: 'lobby', // lobby, playing, finished
+            settings: { time: 60, goal: 20 },
+            gameData: { 
+                currentWord: null, 
+                timeLeft: 0, 
+                explainerId: null, 
+                judgeId: null, 
+                timerInterval: null 
+            }
+        };
+        socket.join(roomId);
+        socket.emit('room_created', roomId);
+        io.to(roomId).emit('update_lobby', rooms[roomId]);
+    });
+
+    // 2. Вход в комнату
+    socket.on('join_room', ({ roomId, playerName }) => {
+        if (rooms[roomId] && rooms[roomId].state === 'lobby') {
+            const team = rooms[roomId].players.length % 2 === 0 ? 'A' : 'B';
+            rooms[roomId].players.push({ id: socket.id, name: playerName, team: team, score: 0 });
+            socket.join(roomId);
+            io.to(roomId).emit('update_lobby', rooms[roomId]);
+        } else {
+            socket.emit('error_msg', 'Комната не найдена или игра уже идет');
         }
-        const room = aliasRooms[roomId];
-        const teamId = room.players.filter(p => p.team === 1).length <= room.players.filter(p => p.team === 2).length ? 1 : 2;
+    });
+
+    // 3. Старт игры
+    socket.on('start_game', (roomId) => {
+        if (rooms[roomId]) {
+            rooms[roomId].state = 'playing';
+            startRound(roomId);
+        }
+    });
+
+    // 4. Обработка свайпов (Угадано / Пропуск)
+    socket.on('word_action', ({ roomId, action }) => { // action: 'guessed' or 'skip'
+        const room = rooms[roomId];
+        if (!room) return;
+
+        if (action === 'guessed') {
+            // Начисляем очко команде объясняющего
+            const explainer = room.players.find(p => p.id === room.gameData.explainerId);
+            if (explainer) {
+                explainer.score++; // Можно сделать общим счетом команды
+            }
+        }
         
-        room.players.push({ id: socket.id, name: playerName, team: teamId, isHost: room.players.length === 0 });
-
-        io.to(roomKey).emit('alias-update-lobby', { roomId, players: room.players });
+        // Даем следующее слово
+        nextWord(roomId);
     });
 
-    // // 2. Нажатие кнопки старта (requestStart)
-    socket.on('alias-start', ({ roomId, words, timer, maxRounds }) => {
-        const room = aliasRooms[roomId];
-        if (room) {
-            room.gameStarted = true;
-            room.gamePool = words;
-            room.timerLimit = parseInt(timer) || 60;
-            room.maxRounds = parseInt(maxRounds) || 3;
-            startNewTurn(io, roomId);
-        }
+    socket.on('disconnect', () => {
+        // Простая логика удаления: если хост вышел, можно удалять комнату (тут упрощено)
+        console.log('User disconnected:', socket.id);
+    });
+});
+
+// --- ЛОГИКА ИГРЫ ---
+
+function startRound(roomId) {
+    const room = rooms[roomId];
+    if (!room) return;
+
+    // Выбираем роли
+    // Упрощенно: берем случайного игрока как Объясняющего, следующего как Судью
+    const pCount = room.players.length;
+    const explainerIdx = Math.floor(Math.random() * pCount);
+    let judgeIdx = (explainerIdx + 1) % pCount;
+
+    room.gameData.explainerId = room.players[explainerIdx].id;
+    room.gameData.judgeId = room.players[judgeIdx].id;
+    room.gameData.timeLeft = room.settings.time;
+
+    io.to(roomId).emit('round_start', {
+        explainerId: room.gameData.explainerId,
+        judgeId: room.gameData.judgeId,
+        players: room.players
     });
 
-    // // 3. Обработка действия (Угадано/Пропуск)
-    socket.on('alias-action', ({ roomId, isCorrect }) => {
-        const room = aliasRooms[roomId];
-        if (room && room.gameStarted) {
-            room.currentScore += isCorrect ? 1 : -1;
-            io.to(`alias_${roomId}`).emit('alias-update-score', { score: room.currentScore });
-            sendWord(io, roomId);
-        }
-    });
-};
-
-// // Функция: запуск нового хода игрока
-function startNewTurn(io, roomId) {
-    const room = aliasRooms[roomId];
-    const activePlayer = room.players[room.activeIdx];
-    room.currentScore = 0;
-
-    // // Показываем экран подготовки
-    io.to(`alias_${roomId}`).emit('alias-prep-screen', { playerName: activePlayer.name });
-
-    // // Через 4 секунды начинаем саму игру
-    setTimeout(() => {
-        if (room.gameStarted) {
-            sendWord(io, roomId);
-            startTimer(io, roomId);
-        }
-    }, 4000);
+    nextWord(roomId);
+    startTimer(roomId);
 }
 
-// // Функция: выдача слова и выбор судьи
-function sendWord(io, roomId) {
-    const room = aliasRooms[roomId];
-    const word = room.gamePool.pop();
-    const active = room.players[room.activeIdx];
-    const enemies = room.players.filter(p => p.team !== active.team);
-    const swiper = enemies.length > 0 ? enemies[0] : active;
-
-    io.to(`alias_${roomId}`).emit('alias-new-turn', {
-        word: word,
-        activePlayerId: active.id,
-        swiperId: swiper.id
-    });
+function nextWord(roomId) {
+    const room = rooms[roomId];
+    const word = ALIAS_WORDS[Math.floor(Math.random() * ALIAS_WORDS.length)];
+    room.gameData.currentWord = word;
+    
+    // Отправляем слово только Судье и Объясняющему (для надежности можно всем, но скрывать CSS)
+    io.to(roomId).emit('new_word', word);
 }
 
-// // Функция: серверный таймер
-function startTimer(io, roomId) {
-    const room = aliasRooms[roomId];
-    let time = room.timerLimit;
-    if (aliasIntervals[roomId]) clearInterval(aliasIntervals[roomId]);
+function startTimer(roomId) {
+    const room = rooms[roomId];
+    
+    // Очистка предыдущего интервала
+    if (room.gameData.timerInterval) clearInterval(room.gameData.timerInterval);
 
-    aliasIntervals[roomId] = setInterval(() => {
-        time--;
-        io.to(`alias_${roomId}`).emit('alias-timer-tick', { timeLeft: time });
-        if (time <= 0) {
-            clearInterval(aliasIntervals[roomId]);
-            endTurn(io, roomId);
+    room.gameData.timerInterval = setInterval(() => {
+        room.gameData.timeLeft--;
+        io.to(roomId).emit('timer_update', room.gameData.timeLeft);
+
+        if (room.gameData.timeLeft <= 0) {
+            clearInterval(room.gameData.timerInterval);
+            io.to(roomId).emit('round_end'); // Клиент перейдет в лобби или экран счета
+            // Тут можно добавить логику смены раунда или завершения игры
+            room.state = 'lobby'; // Возвращаем в лобби для простоты
+            io.to(roomId).emit('update_lobby', room);
         }
     }, 1000);
 }
 
-// // Функция: завершение хода
-function endTurn(io, roomId) {
-    const room = aliasRooms[roomId];
-    const active = room.players[room.activeIdx];
-    room.teams[active.team].score += room.currentScore;
-
-    room.activeIdx++;
-    if (room.activeIdx >= room.players.length) {
-        room.activeIdx = 0;
-        room.currentRound++;
-    }
-
-    if (room.currentRound > room.maxRounds) {
-        io.to(`alias_${roomId}`).emit('alias-game-over', { teams: room.teams });
-    } else {
-        startNewTurn(io, roomId);
-    }
-}
+server.listen(PORT, () => {
+    console.log(`Server running on port ${PORT}`);
+});
