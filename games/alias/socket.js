@@ -1,3 +1,7 @@
+// ВАЖНО: Объект rooms должен быть ВНЕ экспорта, 
+// чтобы он был один для всех подключений
+const rooms = {};
+
 const ALIAS_WORDS = [
     "Космос", "Велосипед", "Программист", "Сервер", "Кот", "Небоскреб",
     "Машина", "Футбол", "Пицца", "Интернет", "Робот", "Банан",
@@ -6,16 +10,13 @@ const ALIAS_WORDS = [
     "Снег", "Кофе", "Чай", "Самолет", "Поезд", "Океан"
 ];
 
-// Хранилище комнат
-const rooms = {};
-
 module.exports = (io, socket) => {
     
-    // --- 1. СОЗДАНИЕ ---
+    // --- СОЗДАНИЕ КОМНАТЫ ---
     socket.on('create_room', ({ playerName }) => {
+        // Генерируем ID
         const roomId = Math.random().toString(36).substring(2, 7).toUpperCase();
-        console.log(`[ALIAS] Create Room: ${roomId} by ${playerName}`);
-
+        
         rooms[roomId] = {
             id: roomId,
             hostId: socket.id,
@@ -36,20 +37,23 @@ module.exports = (io, socket) => {
         };
 
         socket.join(roomId);
+        // Отправляем подтверждение только создателю
         socket.emit('room_created', { roomId, players: rooms[roomId].players });
+        // Обновляем лобби для всех в комнате
         io.to(roomId).emit('update_lobby', rooms[roomId]);
+        console.log(`[ALIAS] Room Created: ${roomId} by ${playerName}`);
     });
 
-    // --- 2. ВХОД ---
+    // --- ВХОД В КОМНАТУ ---
     socket.on('join_room', ({ roomId, playerName }) => {
         if (!roomId) return;
-        roomId = roomId.toUpperCase().trim();
-        
-        const room = rooms[roomId];
+        const cleanId = roomId.toUpperCase().trim();
+        const room = rooms[cleanId];
 
-        if (room && room.state === 'lobby') {
-            console.log(`[ALIAS] Join Room: ${roomId} by ${playerName}`);
+        if (room) {
+            console.log(`[ALIAS] Player ${playerName} joining ${cleanId}`);
             
+            // Проверяем, не занято ли имя (опционально)
             room.players.push({
                 id: socket.id,
                 name: playerName,
@@ -57,59 +61,52 @@ module.exports = (io, socket) => {
                 isHost: false
             });
 
-            socket.join(roomId);
+            socket.join(cleanId);
             
-            // Важно: Сначала уведомляем игрока, что он вошел
-            socket.emit('room_created', { roomId, players: room.players });
-            // Потом обновляем лобби для всех
-            io.to(roomId).emit('update_lobby', room);
+            // Сначала подтверждаем вход игроку
+            socket.emit('room_created', { roomId: cleanId, players: room.players });
+            // Обновляем лобби для всей комнаты
+            io.to(cleanId).emit('update_lobby', room);
         } else {
-            socket.emit('error_msg', 'Комната не найдена!');
+            console.log(`[ALIAS] Join failed: Room ${cleanId} not found`);
+            socket.emit('error_msg', `Комната ${cleanId} не найдена`);
         }
     });
 
-    // --- 3. СТАРТ ---
+    // --- СТАРТ ИГРЫ ---
     socket.on('start_game', (roomId) => {
-        if (!roomId) return;
-        roomId = roomId.toUpperCase();
-        const room = rooms[roomId];
+        const cleanId = roomId.toUpperCase().trim();
+        const room = rooms[cleanId];
         
-        if (!room) return;
-        if (room.hostId !== socket.id) return; // Защита: только хост
-
-        console.log(`[ALIAS] Start Game: ${roomId}`);
-        room.state = 'playing';
-        
-        startRound(roomId);
+        if (room && room.hostId === socket.id) {
+            room.state = 'playing';
+            startRound(cleanId);
+        }
     });
 
-    // --- 4. ДЕЙСТВИЯ (СВАЙПЫ) ---
+    // --- ЛОГИКА СЛОВ ---
     socket.on('word_action', ({ roomId, action }) => {
-        const room = rooms[roomId];
+        const room = rooms[roomId.toUpperCase().trim()];
         if (!room || room.state !== 'playing') return;
 
         if (action === 'guessed') {
             const player = room.players.find(p => p.id === room.gameData.explainerId);
             if (player) player.score++;
         }
-        nextWord(roomId);
+        nextWord(room.id);
     });
 
-    // --- ВНУТРЕННИЕ ФУНКЦИИ ---
+    // --- ФУНКЦИИ ИГРЫ ---
     function startRound(roomId) {
         const room = rooms[roomId];
-        if (!room) return;
-
-        // Выбор ролей
         const pCount = room.players.length;
-        if (pCount < 1) return; // Страховка
+        if (pCount < 1) return;
 
-        let explainerIdx = Math.floor(Math.random() * pCount);
-        // Если игроков больше 1, судья другой человек. Если 1 (тест) - он же.
-        let judgeIdx = pCount > 1 ? (explainerIdx + 1) % pCount : explainerIdx;
+        let expIdx = Math.floor(Math.random() * pCount);
+        let jdgIdx = pCount > 1 ? (expIdx + 1) % pCount : expIdx;
 
-        room.gameData.explainerId = room.players[explainerIdx].id;
-        room.gameData.judgeId = room.players[judgeIdx].id;
+        room.gameData.explainerId = room.players[expIdx].id;
+        room.gameData.judgeId = room.players[jdgIdx].id;
         room.gameData.timeLeft = 60;
 
         io.to(roomId).emit('round_start', {
@@ -118,43 +115,35 @@ module.exports = (io, socket) => {
         });
 
         nextWord(roomId);
-        startTimer(roomId);
-    }
-
-    function nextWord(roomId) {
-        const room = rooms[roomId];
-        const word = ALIAS_WORDS[Math.floor(Math.random() * ALIAS_WORDS.length)];
-        room.gameData.currentWord = word;
-        io.to(roomId).emit('new_word', word);
-    }
-
-    function startTimer(roomId) {
-        const room = rooms[roomId];
+        
         if (room.gameData.timerInterval) clearInterval(room.gameData.timerInterval);
-
         room.gameData.timerInterval = setInterval(() => {
             room.gameData.timeLeft--;
             io.to(roomId).emit('timer_update', room.gameData.timeLeft);
 
             if (room.gameData.timeLeft <= 0) {
                 clearInterval(room.gameData.timerInterval);
-                io.to(roomId).emit('round_end');
                 room.state = 'lobby';
+                io.to(roomId).emit('round_end');
                 io.to(roomId).emit('update_lobby', room);
             }
         }, 1000);
     }
 
-    // Очистка при отключении
+    function nextWord(roomId) {
+        const room = rooms[roomId];
+        const word = ALIAS_WORDS[Math.floor(Math.random() * ALIAS_WORDS.length)];
+        io.to(roomId).emit('new_word', word);
+    }
+
     socket.on('disconnect', () => {
-        // Упрощенная логика: удаляем игрока из комнат (можно доработать)
-        for (const roomId in rooms) {
-            const room = rooms[roomId];
-            room.players = room.players.filter(p => p.id !== socket.id);
-            if (room.players.length === 0) {
-                delete rooms[roomId];
+        for (const rId in rooms) {
+            rooms[rId].players = rooms[rId].players.filter(p => p.id !== socket.id);
+            if (rooms[rId].players.length === 0) {
+                clearInterval(rooms[rId].gameData.timerInterval);
+                delete rooms[rId];
             } else {
-                io.to(roomId).emit('update_lobby', room);
+                io.to(rId).emit('update_lobby', rooms[rId]);
             }
         }
     });
