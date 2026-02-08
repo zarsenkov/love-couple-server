@@ -1,0 +1,72 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ZINE ONLINE</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+<body>
+    <div class="app-container">
+        <a href="../index.html" class="zine-back-button">← НАЗАД</a>
+
+        <section id="setup-screen" class="screen active">
+            <h1>ZINE_ON</h1>
+            <div class="rules-box">ВВЕДИ ДАННЫЕ ДЛЯ КОМНАТЫ</div>
+            <input type="text" id="player-name" placeholder="ТВОЕ ИМЯ">
+            <input type="text" id="room-id" placeholder="НОМЕР КОМНАТЫ">
+            <button onclick="joinLobby()" class="btn-zinc">ВОЙТИ</button>
+        </section>
+
+        <section id="lobby-screen" class="screen">
+            <h2 id="room-display" style="text-align:center;">ЛОББИ</h2>
+            <div id="host-controls" class="rules-box" style="display:none;">
+                <p>РАУНДОВ: <input type="number" id="rounds-count" value="3" style="width:50px; padding:2px;"></p>
+                <p>ТАЙМЕР: <input type="number" id="timer-val" value="60" style="width:50px; padding:2px;"> сек</p>
+            </div>
+            <div class="rules-box">
+                <strong>ИГРОКИ:</strong>
+                <ul id="players-list" style="list-style:none; padding:0; margin-top:10px;"></ul>
+            </div>
+            <button id="start-btn" onclick="requestStart()" class="btn-zinc hidden">НАЧАТЬ ИГРУ</button>
+        </section>
+
+        <section id="game-screen" class="screen">
+            <div id="timer">60</div>
+            <div id="role-banner" class="rules-box" style="text-align:center; font-weight:bold;">ОЖИДАНИЕ...</div>
+            
+            <div class="game-card">
+                <div class="letter-tag">БУКВЫ: <span id="target-letters">? ? ?</span></div>
+                <div id="current-word" class="word-display">---</div>
+            </div>
+
+            <div id="host-actions" style="display:none; flex-direction:column; gap:10px;">
+                <button onclick="showScoreModal()" class="btn-zinc" style="background:#26DE81; color:#000;">УГАДАЛИ!</button>
+                <button onclick="handleSkip()" class="btn-zinc" style="background:#bbb; color:#000;">ПРОПУСТИТЬ</button>
+            </div>
+            
+            <div id="guest-msg" class="rules-box" style="display:none; text-align:center;">
+                СЛУШАЙТЕ ВЕДУЩЕГО!
+            </div>
+        </section>
+
+        <section id="result-screen" class="screen">
+            <h1>ФИНАЛ</h1>
+            <div class="rules-box" id="final-stats"></div>
+            <button onclick="location.reload()" class="btn-zinc">ЗАНОВО</button>
+        </section>
+    </div>
+
+    <div id="score-modal" class="modal-overlay" style="display:none;">
+        <div class="modal-content rules-box" style="width:100%; max-width:300px;">
+            <p style="font-weight:bold; text-align:center;">КТО УГАДАЛ?</p>
+            <div id="winner-buttons"></div>
+            <button onclick="closeModal()" class="btn-zinc" style="background:#ccc; margin-top:10px; box-shadow:none;">ОТМЕНА</button>
+        </div>
+    </div>
+
+<script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+<script src="cards.js"></script>
+<script src="script.js"></script>
+</body>
+</html>
