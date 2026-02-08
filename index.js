@@ -6,7 +6,7 @@ const path = require('path');
 
 // Импортируем игровые модули
 const slovoSocket = require('./games/slovo/socket');
-// const whoamiSocket = require('./games/whoami/socket'); // Подключим позже
+const whoamiSocket = require('./games/whoami/socket'); // Подключим позже
 
 const app = express();
 app.use(cors());
