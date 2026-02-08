@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>КТО Я? // ОНЛАЙН</title>
+    <link rel="stylesheet" href="style.css">
+    <link href="https://fonts.googleapis.com/css2?family=Montserrat:wght@800;900&display=swap" rel="stylesheet">
+</head>
+<body>
+    <div class="app-container">
+        <section class="screen active" id="join-screen">
+            <h1 class="main-title">КТО<span>Я?</span></h1>
+            <div class="card-glass">
+                <input type="text" id="player-name" class="joy-input" placeholder="Твое имя">
+                <input type="text" id="room-id" class="joy-input" placeholder="ID комнаты">
+                <button class="primary-btn" onclick="joinGame()">ВОЙТИ</button>
+            </div>
+        </section>
+
+        <section class="screen" id="lobby-screen">
+            <h2 id="room-display">КОМНАТА: ---</h2>
+            <div class="card-glass">
+                <p class="section-tag">ИГРОКИ</p>
+                <ul id="players-list"></ul>
+            </div>
+            
+            <div id="host-controls" style="display: none;">
+                <p class="section-tag">КАТЕГОРИИ</p>
+                <div id="categories-box" class="categories-grid"></div>
+                <button class="primary-btn" onclick="startGame()">ПОЕХАЛИ!</button>
+            </div>
+            <p id="wait-msg">Ждем хоста...</p>
+        </section>
+
+        <section class="screen" id="game-screen">
+            <div class="game-header">
+                <div class="timer-box">⏱ <span id="timer">0</span></div>
+                <div id="active-player-name" class="active-badge">---</div>
+            </div>
+            
+            <div class="card-main">
+                <h1 id="current-word">???</h1>
+                <p id="instruction">Ждем начала...</p>
+            </div>
+
+            <div id="action-buttons" class="game-controls" style="display: none;">
+                <button class="btn-skip" onclick="sendAction(false)">ПАС</button>
+                <button class="btn-win" onclick="sendAction(true)">УГАДАЛ!</button>
+            </div>
+        </section>
+
+        <section class="screen" id="result-screen">
+            <h1 class="main-title-small">ФИНАЛ</h1>
+            <div id="final-stats" class="card-glass"></div>
+            <button class="primary-btn" onclick="location.reload()">В МЕНЮ</button>
+        </section>
+    </div>
+
+    <script src="https://cdn.socket.io/4.7.2/socket.io.min.js"></script>
+    <script src="script.js"></script>
+</body>
+</html>
