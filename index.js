@@ -4,33 +4,41 @@ const { Server } = require("socket.io");
 const cors = require('cors');
 const path = require('path');
 
-// Импортируем игровые модули
+// 1. Импортируем модули логики
 const slovoSocket = require('./games/slovo/socket');
-const whoamiSocket = require('./games/whoami/socket'); // Подключим позже
+const whoamiSocket = require('./games/whoami/socket');
 
 const app = express();
+
+// Разрешаем CORS для экспресса (на случай будущих API запросов)
 app.use(cors());
 
 const server = http.createServer(app);
-const io = new Server(server, { cors: { origin: "*" } });
 
-// Статика: открываем доступ ко всей папке games
-app.use('/games', express.static(path.join(__dirname, 'games')));
+// 2. Настройка Socket.io с CORS
+// Это самое важное, чтобы фронтенд из другого репозитория мог подключиться
+const io = new Server(server, { 
+    cors: { 
+        origin: "*", // Позволяет подключаться с любого домена (твоих репозиториев lovedeck)
+        methods: ["GET", "POST"]
+    } 
+});
+
+// Убираем статику app.use('/games', ...), так как фронтенд теперь живет в другом месте
 
 io.on('connection', (socket) => {
-    console.log('User connected:', socket.id);
+    console.log('Новое подключение к серверу сокетов:', socket.id);
 
-    // Подключаем логику игры "Слово"
+    // 3. Подключаем логику игр
     slovoSocket(io, socket);
-
-    // Когда создадим socket.js для "Кто я", просто добавим:
-    // whoamiSocket(io, socket);
+    whoamiSocket(io, socket);
 
     socket.on('disconnect', () => {
-        console.log('User disconnected:', socket.id);
+        console.log('Пользователь отключился:', socket.id);
     });
 });
 
+// Запуск на порту 80 для Amvera
 server.listen(80, () => {
-    console.log('Main Server started on port 80');
+    console.log('API & Socket Server started on port 80');
 });
