@@ -64,15 +64,21 @@ module.exports = (io, socket) => {
     });
 };
 
-function sendWhoAmITurn(io, roomId) {
+function sendWhoAmITurn(io, roomId, isNewPlayer = false) {
     const room = roomsWhoAmI[roomId];
-    const roomKey = `whoami_${roomId}`;
+    // ... логика проверки пустого пула ...
 
-    if (!room || room.gamePool.length === 0) {
-        room.gameStarted = false;
-        io.to(roomKey).emit('whoami-game-over', { players: room.players });
-        return;
-    }
+    const active = room.players[room.activeIdx];
+    const word = room.gamePool.pop();
+
+    io.to(`whoami_${roomId}`).emit('whoami-new-turn', {
+        activePlayerId: active.id,
+        activePlayerName: active.name,
+        word: word,
+        timer: room.timerVal,
+        isNewPlayer: isNewPlayer // Передаем этот флаг!
+    });
+}
 
     const activePlayer = room.players[room.activeIdx];
     const currentWord = room.gamePool.pop(); // Достаем последнее слово из пула
