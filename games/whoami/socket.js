@@ -1,7 +1,7 @@
 const roomsWhoAmI = {};
 
 module.exports = (io, socket) => {
-    // Вход в игру "Кто я"
+    // 1. Вход в игру
     socket.on('whoami-join', ({ roomId, playerName }) => {
         const roomKey = `whoami_${roomId}`;
         socket.join(roomKey);
@@ -31,79 +31,92 @@ module.exports = (io, socket) => {
         });
     });
 
-    // Хост запускает игру и присылает сформированный массив слов
+    // 2. Старт игры (Хост)
     socket.on('whoami-start', ({ roomId, words, timer }) => {
         const room = roomsWhoAmI[roomId];
         if (room) {
             room.gameStarted = true;
-            room.gamePool = words; // Перемешанный список слов по выбранным категориям
+            room.gamePool = words;
             room.timerVal = timer || 90;
             room.activeIdx = 0;
-            sendWhoAmITurn(io, roomId);
+            // Передаем true, так как это старт хода первого игрока
+            sendWhoAmITurn(io, roomId, true);
         }
     });
 
-    // Кнопки "Угадал" или "Пас"
+    // 3. Действие: "Угадал" или "Пас"
     socket.on('whoami-action', ({ roomId, isCorrect }) => {
         const room = roomsWhoAmI[roomId];
         if (room && room.gameStarted) {
             if (isCorrect) {
                 room.players[room.activeIdx].score++;
             }
-            sendWhoAmITurn(io, roomId);
+            // Передаем false, чтобы таймер у этого же игрока НЕ сбрасывался
+            sendWhoAmITurn(io, roomId, false);
         }
     });
 
-    // Время вышло — переход хода к следующему игроку
+    // 4. Время вышло — переход хода
     socket.on('whoami-timeout', (roomId) => {
         const room = roomsWhoAmI[roomId];
         if (room && room.gameStarted) {
             room.activeIdx = (room.activeIdx + 1) % room.players.length;
-            sendWhoAmITurn(io, roomId);
+            // Передаем true, так как ход перешел к новому игроку
+            sendWhoAmITurn(io, roomId, true);
+        }
+    });
+
+    // 5. Выход из комнаты
+    socket.on('whoami-leave', (roomId) => {
+        handleLeave(io, socket, roomId);
+    });
+
+    // 6. Обработка внезапного отключения (закрыл вкладку)
+    socket.on('disconnect', () => {
+        for (const roomId in roomsWhoAmI) {
+            const room = roomsWhoAmI[roomId];
+            if (room.players.some(p => p.id === socket.id)) {
+                handleLeave(io, socket, roomId);
+            }
         }
     });
 };
 
-socket.on('whoami-leave', (roomId) => {
-    const room = roomsWhoAmI[roomId];
-    if (room) {
-        // Удаляем игрока из списка по socket.id
-        room.players = room.players.filter(p => p.id !== socket.id);
-        
-        // Если в комнате никого не осталось — удаляем комнату
-        if (room.players.length === 0) {
-            delete roomsWhoAmI[roomId];
-        } else {
-            // Оповещаем остальных, чтобы обновили лобби
-            io.to(`whoami_${roomId}`).emit('whoami-update-lobby', { players: room.players });
-        }
-    }
-    socket.leave(`whoami_${roomId}`);
-});
+// --- Вспомогательные функции (вынесены за пределы экспорта) ---
 
 function sendWhoAmITurn(io, roomId, isNewPlayer = false) {
     const room = roomsWhoAmI[roomId];
-    // ... логика проверки пустого пула ...
+    const roomKey = `whoami_${roomId}`;
 
-    const active = room.players[room.activeIdx];
-    const word = room.gamePool.pop();
-
-    io.to(`whoami_${roomId}`).emit('whoami-new-turn', {
-        activePlayerId: active.id,
-        activePlayerName: active.name,
-        word: word,
-        timer: room.timerVal,
-        isNewPlayer: isNewPlayer // Передаем этот флаг!
-    });
-}
+    if (!room || room.gamePool.length === 0) {
+        io.to(roomKey).emit('whoami-over', { players: room.players });
+        room.gameStarted = false;
+        return;
+    }
 
     const activePlayer = room.players[room.activeIdx];
-    const currentWord = room.gamePool.pop(); // Достаем последнее слово из пула
+    const currentWord = room.gamePool.pop();
 
     io.to(roomKey).emit('whoami-new-turn', {
         activePlayerId: activePlayer.id,
         activePlayerName: activePlayer.name,
         word: currentWord,
-        timer: room.timerVal
+        timer: room.timerVal,
+        isNewPlayer: isNewPlayer
     });
+}
+
+function handleLeave(io, socket, roomId) {
+    const room = roomsWhoAmI[roomId];
+    if (room) {
+        room.players = room.players.filter(p => p.id !== socket.id);
+        const roomKey = `whoami_${roomId}`;
+        
+        if (room.players.length === 0) {
+            delete roomsWhoAmI[roomId];
+        } else {
+            io.to(roomKey).emit('whoami-update-lobby', { players: room.players });
+        }
+    }
+    socket.leave(`whoami_${roomId}`);
 }
