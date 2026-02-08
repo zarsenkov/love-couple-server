@@ -9,8 +9,7 @@ app.use(cors());
 
 // --- БЛОК ДЛЯ РАЗДАЧИ ФАЙЛОВ (ВСТАВЛЯТЬ СЮДА) ---
 // Этот блок позволяет браузеру "видеть" ваш cards.js и папку online
-app.use('/games/slovo', express.static(path.join(__dirname, 'games/slovo')));
-app.use('/games/slovo/online', express.static(path.join(__dirname, 'games/slovo/online')));
+app.use('/games', express.static(path.join(__dirname, 'games')));
 // -----------------------------------------------
 
 const server = http.createServer(app);
