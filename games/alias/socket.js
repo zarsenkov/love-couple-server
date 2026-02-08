@@ -1,108 +1,158 @@
-// // Хранилище сессий (из репозитория)
-const rooms = {};
-const intervals = {};
+// // Объект для хранения данных комнат (игроки, счет, слова)
+const aliasRooms = {};
+// // Объект для контроля таймеров
+const aliasIntervals = {};
 
 module.exports = (io, socket) => {
-    // // 1. Логика создания/входа
+    // // Функция: Вход в игру или создание комнаты
     socket.on('alias-join', ({ roomId, playerName }) => {
-        socket.join(`alias_${roomId}`);
-        if (!rooms[roomId]) {
-            rooms[roomId] = {
+        const roomKey = `alias_${roomId}`;
+        socket.join(roomKey);
+
+        // // Если комнаты еще нет, создаем её структуру
+        if (!aliasRooms[roomId]) {
+            aliasRooms[roomId] = {
                 players: [],
                 gameStarted: false,
                 activeIdx: 0,
-                score: { 1: 0, 2: 0 },
-                settings: { timer: 60, rounds: 3 }
+                currentScore: 0,
+                teams: {
+                    1: { name: "Еноты", score: 0 },
+                    2: { name: "Панды", score: 0 }
+                }
             };
         }
-        const room = rooms[roomId];
-        const team = room.players.filter(p => p.team === 1).length <= room.players.filter(p => p.team === 2).length ? 1 : 2;
-        
-        const player = { id: socket.id, name: playerName, team, isHost: room.players.length === 0 };
-        room.players.push(player);
 
-        io.to(`alias_${roomId}`).emit('alias-update-lobby', {
+        const room = aliasRooms[roomId];
+        // // Автоматически распределяем игрока в команду, где меньше людей
+        const teamId = room.players.filter(p => p.team === 1).length <= room.players.filter(p => p.team === 2).length ? 1 : 2;
+        
+        // // Добавляем игрока в список
+        room.players.push({
+            id: socket.id,
+            name: playerName,
+            team: teamId,
+            isHost: room.players.length === 0 // // Первый вошедший становится хостом
+        });
+
+        // // Рассылаем всем в комнате обновленный список игроков
+        io.to(roomKey).emit('alias-update-lobby', {
+            roomId: roomId,
             players: room.players,
-            teams: { 1: { name: "Еноты" }, 2: { name: "Панды" } }
+            teams: room.teams
         });
     });
 
-    // // 2. Логика старта (Хост)
-    socket.on('alias-start', ({ roomId, words, timer, rounds }) => {
-        const room = rooms[roomId];
+    // // Функция: Старт игры (вызывается хостом)
+    socket.on('alias-start', ({ roomId, words, timer, maxRounds }) => {
+        const room = aliasRooms[roomId];
         if (room) {
             room.gameStarted = true;
-            room.gamePool = words;
-            room.settings.timer = timer;
-            room.settings.rounds = rounds;
+            room.gamePool = words; // // Слова передаются с фронтенда (из cards.js)
+            room.timerVal = parseInt(timer) || 60;
+            room.maxRounds = parseInt(maxRounds) || 3;
+            room.currentRound = 1;
             room.activeIdx = 0;
             
-            // // Запуск раунда (логика передачи хода из Гитхаба)
-            nextTurn(io, roomId);
+            startAliasRound(io, roomId);
         }
     });
 
-    // // 3. Логика Свайпа (Событие от угадывающего)
+    // // Функция: Угадано/Пропуск (действие от игрока)
     socket.on('alias-action', ({ roomId, isCorrect }) => {
-        const room = rooms[roomId];
+        const room = aliasRooms[roomId];
         if (room && room.gameStarted) {
-            const points = isCorrect ? 1 : -1;
-            const activePlayer = room.players[room.activeIdx];
-            room.score[activePlayer.team] += points;
-            
-            io.to(`alias_${roomId}`).emit('alias-update-score', { score: room.score });
-            sendWord(io, roomId);
+            room.currentScore += isCorrect ? 1 : -1; // // +1 за угаданное, -1 за пропуск
+            io.to(`alias_${roomId}`).emit('alias-update-score', { score: room.currentScore });
+            sendAliasWord(io, roomId);
         }
     });
 };
 
-// // ФУНКЦИЯ: Показать экран подготовки
-function nextTurn(io, roomId) {
-    const room = rooms[roomId];
-    const active = room.players[room.activeIdx];
+// // Логика запуска нового хода
+function startAliasRound(io, roomId) {
+    const room = aliasRooms[roomId];
+    const activePlayer = room.players[room.activeIdx];
     
-    io.to(`alias_${roomId}`).emit('alias-prep-screen', { 
-        playerName: active.name,
-        teamName: active.team === 1 ? "Еноты" : "Панды"
+    // // Уведомляем всех, кто сейчас объясняет
+    io.to(`alias_${roomId}`).emit('alias-prep-screen', {
+        playerName: activePlayer.name,
+        teamName: room.teams[activePlayer.team].name
     });
 
+    // // Пауза 4 секунды перед началом, чтобы игрок приготовился
     setTimeout(() => {
-        startTimer(io, roomId);
-        sendWord(io, roomId);
+        if (room.gameStarted) {
+            runAliasTimer(io, roomId);
+            sendAliasWord(io, roomId);
+        }
     }, 4000);
 }
 
-// // ФУНКЦИЯ: Отправка слова и ролей (КТО СВАЙПАЕТ)
-function sendWord(io, roomId) {
-    const room = rooms[roomId];
+// // Отправка нового слова
+function sendAliasWord(io, roomId) {
+    const room = aliasRooms[roomId];
+    if (!room || room.gamePool.length === 0) return;
+
     const word = room.gamePool.pop();
     const active = room.players[room.activeIdx];
     
-    // // Находим врага для свайпа (как ты просил)
+    // // Назначаем "Свайпера" (того, кто отмечает очки). Это может быть сам игрок или враг.
+    // // По твоему запросу: свайпает случайный игрок из ДРУГОЙ команды
     const enemies = room.players.filter(p => p.team !== active.team);
-    const swiper = enemies[Math.floor(Math.random() * enemies.length)];
+    const swiper = enemies.length > 0 ? enemies[Math.floor(Math.random() * enemies.length)] : active;
 
     room.players.forEach(p => {
         io.to(p.id).emit('alias-new-turn', {
-            word,
+            word: word,
             activePlayerId: active.id,
-            swiperId: swiper.id // // Только этот человек увидит кнопки
+            swiperId: swiper.id
         });
     });
 }
 
-// // ФУНКЦИЯ: Серверный таймер (из репозитория)
-function startTimer(io, roomId) {
-    const room = rooms[roomId];
-    let time = room.settings.timer;
-    if (intervals[roomId]) clearInterval(intervals[roomId]);
+// // Работа таймера на сервере (самый надежный способ)
+function runAliasTimer(io, roomId) {
+    const room = aliasRooms[roomId];
+    let time = room.timerVal;
+    
+    if (aliasIntervals[roomId]) clearInterval(aliasIntervals[roomId]);
 
-    intervals[roomId] = setInterval(() => {
+    aliasIntervals[roomId] = setInterval(() => {
         time--;
         io.to(`alias_${roomId}`).emit('alias-timer-tick', { timeLeft: time });
+
         if (time <= 0) {
-            clearInterval(intervals[roomId]);
-            // // Тут логика переключения хода...
+            clearInterval(aliasIntervals[roomId]);
+            handleAliasTurnEnd(io, roomId);
         }
     }, 1000);
+}
+
+// // Завершение хода
+function handleAliasTurnEnd(io, roomId) {
+    const room = aliasRooms[roomId];
+    const active = room.players[room.activeIdx];
+    
+    // // Прибавляем очки команде
+    room.teams[active.team].score += room.currentScore;
+    room.currentScore = 0;
+
+    // // Переходим к следующему игроку
+    room.activeIdx = (room.activeIdx + 1) % room.players.length;
+    
+    // // Если круг закончился, проверяем лимит раундов
+    if (room.activeIdx === 0) room.currentRound++;
+
+    if (room.currentRound > room.maxRounds) {
+        // // Финал игры
+        io.to(`alias_${roomId}`).emit('alias-game-over', {
+            winner: room.teams[1].score > room.teams[2].score ? room.teams[1].name : room.teams[2].name,
+            team1Score: room.teams[1].score,
+            team2Score: room.teams[2].score
+        });
+        room.gameStarted = false;
+    } else {
+        startAliasRound(io, roomId);
+    }
 }
