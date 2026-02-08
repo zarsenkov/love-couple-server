@@ -2,9 +2,17 @@ const express = require('express');
 const http = require('http');
 const { Server } = require("socket.io");
 const cors = require('cors');
+const path = require('path'); // Добавили модуль для работы с путями
 
 const app = express();
 app.use(cors());
+
+// --- БЛОК ДЛЯ РАЗДАЧИ ФАЙЛОВ (ВСТАВЛЯТЬ СЮДА) ---
+// Этот блок позволяет браузеру "видеть" ваш cards.js и папку online
+app.use('/games/slovo', express.static(path.join(__dirname, 'games/slovo')));
+app.use('/games/slovo/online', express.static(path.join(__dirname, 'games/slovo/online')));
+// -----------------------------------------------
+
 const server = http.createServer(app);
 const io = new Server(server, { cors: { origin: "*" } });
 
@@ -30,7 +38,7 @@ io.on('connection', (socket) => {
         const existingPlayer = room.players.find(p => p.name === playerName);
         
         if (existingPlayer) {
-            existingPlayer.id = socket.id; // Обновляем ID при перезаходе
+            existingPlayer.id = socket.id; 
         } else {
             room.players.push({ id: socket.id, name: playerName, score: 0 });
         }
@@ -41,7 +49,7 @@ io.on('connection', (socket) => {
         });
     });
 
-    // 2. Старт игры хостом
+    // 2. Старт игры
     socket.on('start-game', ({ roomId, maxRounds, timer }) => {
         const room = rooms[roomId];
         if (room) {
@@ -54,33 +62,30 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 3. Начисление баллов конкретному игроку (выбор ведущего)
+    // 3. Начисление баллов
     socket.on('add-point-to', ({ roomId, targetName }) => {
         const room = rooms[roomId];
         if (room) {
             const player = room.players.find(p => p.name === targetName);
             if (player) {
                 player.score++;
-                // Обновляем лобби, чтобы все видели новый счет
                 io.to(roomId).emit('update-lobby', { players: room.players, gameStarted: true });
             }
         }
     });
 
-    // 4. Передача хода следующему игроку
+    // 4. Передача хода
     socket.on('switch-turn', (roomId) => {
         const room = rooms[roomId];
         if (!room) return;
         
         room.activePlayerIndex++;
         
-        // Если круг прошли все игроки
         if (room.activePlayerIndex >= room.players.length) {
             room.activePlayerIndex = 0;
             room.currentRound++;
         }
 
-        // Проверка на завершение всех раундов
         if (room.currentRound > room.maxRounds) {
             room.gameStarted = false;
             io.to(roomId).emit('game-over', { players: room.players });
@@ -89,19 +94,14 @@ io.on('connection', (socket) => {
         }
     });
 
-    // 5. Синхронизация слова и букв (от ведущего к остальным)
+    // 5. Синхронизация
     socket.on('game-action', ({ roomId, data }) => {
         io.to(roomId).emit('game-event', data);
     });
 
-    // Обработка отключения
-    socket.on('disconnect', () => {
-        // Здесь можно добавить логику удаления игрока, 
-        // но по ТЗ лучше оставить как есть, чтобы игра не ломалась при моргании интернета
-    });
+    socket.on('disconnect', () => { });
 });
 
-// Функция отправки данных о текущем ходе
 function sendTurn(roomId) {
     const room = rooms[roomId];
     if (!room || !room.players[room.activePlayerIndex]) return;
@@ -115,7 +115,7 @@ function sendTurn(roomId) {
     });
 }
 
-// Порт 80 для Amvera
+// Запуск на порту 80 (Amvera)
 server.listen(80, () => {
     console.log('ZINE Server started on port 80');
 });
