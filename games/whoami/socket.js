@@ -64,6 +64,23 @@ module.exports = (io, socket) => {
     });
 };
 
+socket.on('whoami-leave', (roomId) => {
+    const room = roomsWhoAmI[roomId];
+    if (room) {
+        // Удаляем игрока из списка по socket.id
+        room.players = room.players.filter(p => p.id !== socket.id);
+        
+        // Если в комнате никого не осталось — удаляем комнату
+        if (room.players.length === 0) {
+            delete roomsWhoAmI[roomId];
+        } else {
+            // Оповещаем остальных, чтобы обновили лобби
+            io.to(`whoami_${roomId}`).emit('whoami-update-lobby', { players: room.players });
+        }
+    }
+    socket.leave(`whoami_${roomId}`);
+});
+
 function sendWhoAmITurn(io, roomId, isNewPlayer = false) {
     const room = roomsWhoAmI[roomId];
     // ... логика проверки пустого пула ...
