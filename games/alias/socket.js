@@ -1,94 +1,62 @@
-// // Хранилище комнат и таймеров
-const aliasRooms = {};
-const aliasIntervals = {};
+// // Серверная логика Alias
+const roomsAlias = {};
 
 module.exports = (io, socket) => {
-
-    // // Вход в комнату: создаем или добавляем в существующую
+    // // Вход в комнату
     socket.on('alias-join', ({ roomId, playerName }) => {
         const roomKey = `alias_${roomId}`;
         socket.join(roomKey);
 
-        if (!aliasRooms[roomId]) {
-            aliasRooms[roomId] = {
-                players: [],
-                gameStarted: false,
-                activeIdx: 0,
-                currentScore: 0,
-                teams: { 1: { name: "Команда 1", score: 0 }, 2: { name: "Команда 2", score: 0 } }
+        if (!roomsAlias[roomId]) {
+            roomsAlias[roomId] = {
+                players: [], gameStarted: false, activeIdx: 0, 
+                currentScore: 0, gamePool: [], teams: { 1: { score: 0 }, 2: { score: 0 } }
             };
         }
 
-        const room = aliasRooms[roomId];
-        // // Балансировка по командам
+        const room = roomsAlias[roomId];
         const teamId = room.players.filter(p => p.team === 1).length <= room.players.filter(p => p.team === 2).length ? 1 : 2;
         
-        room.players.push({
-            id: socket.id,
-            name: playerName,
-            team: teamId,
-            isHost: room.players.length === 0
-        });
+        room.players.push({ id: socket.id, name: playerName, team: teamId, isHost: room.players.length === 0 });
 
-        // // Обновляем лобби для всех
-        io.to(roomKey).emit('alias-update-lobby', {
-            roomId: roomId,
-            players: room.players
-        });
+        io.to(roomKey).emit('alias-update-lobby', { roomId, players: room.players });
     });
 
-    // // Запуск игры: срабатывает по кнопке "ПОГНАЛИ"
+    // // СТАРТ ИГРЫ
     socket.on('alias-start', ({ roomId, words }) => {
-        const room = aliasRooms[roomId];
-        if (room && !room.gameStarted) {
+        const room = roomsAlias[roomId];
+        if (room) {
             room.gameStarted = true;
-            room.gamePool = words; // // Список слов от клиента
-            
-            // // Передаем ход первому игроку
-            startNewTurn(io, roomId);
+            room.gamePool = words;
+            // // Запускаем первый ход
+            sendWord(io, roomId);
         }
     });
 
-    // // Обработка действий (Угадано/Пропуск)
+    // // Логика обработки очков
     socket.on('alias-action', ({ roomId, isCorrect }) => {
-        const room = aliasRooms[roomId];
+        const room = roomsAlias[roomId];
         if (room && room.gameStarted) {
             room.currentScore += isCorrect ? 1 : -1;
             io.to(`alias_${roomId}`).emit('alias-update-score', { score: room.currentScore });
-            sendWord(io, roomId);
+            sendWord(io, roomId); // // Даем следующее слово
         }
     });
 };
 
-// // Функция отправки нового слова
+// // Функция отправки слова и назначения ролей
 function sendWord(io, roomId) {
-    const room = aliasRooms[roomId];
-    if (!room || room.gamePool.length === 0) return;
-
+    const room = roomsAlias[roomId];
     const word = room.gamePool.pop();
     const active = room.players[room.activeIdx];
     
-    // // Свайпер (тот кто отмечает) - игрок из другой команды
+    // // Назначаем Свайпера (судью) из другой команды
     const enemies = room.players.filter(p => p.team !== active.team);
-    const swiper = enemies.length > 0 ? enemies[Math.floor(Math.random() * enemies.length)] : active;
+    const swiper = enemies.length > 0 ? enemies[0] : active;
 
     io.to(`alias_${roomId}`).emit('alias-new-turn', {
         word: word,
         activePlayerId: active.id,
         swiperId: swiper.id
     });
-}
-
-// // Начало нового хода
-function startNewTurn(io, roomId) {
-    const room = aliasRooms[roomId];
-    const active = room.players[room.activeIdx];
-    
-    io.to(`alias_${roomId}`).emit('alias-prep-screen', {
-        playerName: active.name
-    });
-
-    setTimeout(() => {
-        sendWord(io, roomId);
-    }, 3000);
 }
