@@ -1,129 +1,103 @@
-// Объект для хранения активных игровых комнат "Шпиона"
-// Ключ — ID комнаты, значение — объект с данными (игроки, локация и т.д.)
 const roomsSpy = {};
+const { LOCATIONS } = require('./cards'); // Подключаем локации
 
-// Экспортируем функцию для подключения к основному серверу index.js
 module.exports = function(io, socket) {
-
-    // --- ЛОГИКА ВХОДА В КОМНАТУ ---
-    // Вызывается, когда игрок вводит ID комнаты и имя
+    // // ВХОД В ИГРУ
     socket.on('spy-join', ({ roomId, playerName }) => {
-        // Если такой комнаты еще нет — создаем новую структуру
         if (!roomsSpy[roomId]) {
-            roomsSpy[roomId] = {
-                players: [],
-                gameStarted: false,
-                location: "",
-                spies: []
+            roomsSpy[roomId] = { 
+                id: roomId, players: [], status: 'LOBBY', 
+                readyCount: 0, location: '', spies: [], votes: {} 
             };
         }
-
         const room = roomsSpy[roomId];
-
-        // Проверяем, нет ли уже игрока с таким же именем (защита от дублей)
-        if (room.players.find(p => p.name === playerName)) {
-            socket.emit('spy-error', 'Это имя уже занято!');
-            return;
-        }
-
-        // Создаем объект нового игрока. Если список пуст — он будет хостом (isHost: true)
         const isHost = room.players.length === 0;
-        const newPlayer = {
-            id: socket.id,
-            name: playerName,
-            isHost: isHost,
-            role: null
-        };
-
-        // Добавляем игрока в массив и подписываем его сокет на канал комнаты
-        room.players.push(newPlayer);
+        
+        room.players.push({ id: socket.id, name: playerName, isHost: isHost });
         socket.join(roomId);
-
-        // Рассылаем всем в комнате обновленный список участников для отображения в лобби
-        io.to(roomId).emit('spy-update-lobby', {
-            players: room.players,
-            gameStarted: room.gameStarted
-        });
+        io.to(roomId).emit('spy-update-lobby', { roomId, players: room.players });
     });
 
-    // --- ЛОГИКА ЗАПУСКА ИГРЫ ---
-    // Вызывается только хостом при нажатии кнопки "Запустить"
-    socket.on('spy-start', ({ roomId, settings }) => {
+    // // РАСПРЕДЕЛЕНИЕ РОЛЕЙ
+    socket.on('spy-start-request', (roomId) => {
         const room = roomsSpy[roomId];
-        // Если комнаты нет, прерываем выполнение
-        if (!room) return;
+        if (!room || room.players.length < 3) return;
 
-        room.gameStarted = true;
+        room.status = 'READY_CHECK';
+        room.readyCount = 0;
+        room.location = LOCATIONS[Math.floor(Math.random() * LOCATIONS.length)];
         
-        // Выбираем случайную локацию один раз на сервере, чтобы она была одинаковой у всех "мирных"
-        const locations = settings.locations;
-        room.location = locations[Math.floor(Math.random() * locations.length)];
+        // Расчет шпионов (1 на 3-5 чел, 2 на 6+)
+        const spyCount = room.players.length >= 6 ? 2 : 1;
+        const shuffled = [...room.players].sort(() => 0.5 - Math.random());
+        room.spies = shuffled.slice(0, spyCount).map(p => p.id);
 
-        // Генерируем список индексов игроков для выбора шпионов
-        const playerIndices = [...Array(room.players.length).keys()];
-        const spyIndices = [];
-        
-        // Выбираем случайных шпионов в зависимости от настроек
-        for (let i = 0; i < settings.spyCount; i++) {
-            if (playerIndices.length > 0) {
-                const randomIdx = Math.floor(Math.random() * playerIndices.length);
-                spyIndices.push(playerIndices.splice(randomIdx, 1)[0]);
-            }
-        }
-
-        // Проходим по всем игрокам и назначаем им роли
-        room.players.forEach((player, index) => {
-            const isSpy = spyIndices.includes(index);
-            player.role = isSpy ? "ШПИОН" : room.location;
-
-            // Отправляем роль каждому игроку ПЕРСОНАЛЬНО через его socket.id
-            // Это гарантирует, что никто не увидит чужую роль через сетевой трафик
-            io.to(player.id).emit('spy-your-role', {
-                role: player.role,
-                location: room.location,
-                isSpy: isSpy,
-                time: settings.time
+        room.players.forEach(p => {
+            const isSpy = room.spies.includes(p.id);
+            io.to(p.id).emit('spy-init-roles', {
+                role: isSpy ? "ШПИОН" : "ЖИТЕЛЬ",
+                location: isSpy ? "???" : room.location,
+                isSpy: isSpy
             });
         });
-
-        // Отправляем сигнал всем, что игра началась (для смены экрана в приложении)
-        io.to(roomId).emit('spy-game-started');
     });
 
-    // --- ПРИНУДИТЕЛЬНОЕ ГОЛОСОВАНИЕ ---
-    // Вызывается, когда время вышло или нажата кнопка завершения
-    socket.on('spy-stop-game', (roomId) => {
-        io.to(roomId).emit('spy-go-to-vote');
-    });
+    // // ИГРОК ОЗНАКОМИЛСЯ
+    socket.on('spy-player-ready', (roomId) => {
+        const room = roomsSpy[roomId];
+        if (!room) return;
+        room.readyCount++;
+        io.to(roomId).emit('spy-ready-update', { ready: room.readyCount, total: room.players.length });
 
-    // --- ОБРАБОТКА ВЫХОДА ИЗ ИГРЫ ---
-    // Вызывается автоматически сокетом при закрытии вкладки или потере сети
-    socket.on('disconnect', () => {
-        // Перебираем все комнаты, чтобы найти, откуда ушел игрок
-        for (const roomId in roomsSpy) {
-            const room = roomsSpy[roomId];
-            const playerIdx = room.players.findIndex(p => p.id === socket.id);
+        if (room.readyCount >= room.players.length) {
+            room.status = 'INGAME';
+            io.to(roomId).emit('spy-game-begin', 300); // 5 минут
             
-            if (playerIdx !== -1) {
-                // Удаляем игрока из списка
-                const disconnectedPlayer = room.players.splice(playerIdx, 1)[0];
-                
-                // Если ушел хост, назначаем первого оставшегося игрока новым хостом
-                if (disconnectedPlayer.isHost && room.players.length > 0) {
-                    room.players[0].isHost = true;
-                }
+            // Авто-переход к голосованию через 5 минут
+            setTimeout(() => {
+                if(room.status === 'INGAME') startVoting(io, roomId);
+            }, 300000);
+        }
+    });
 
-                // Если в комнате больше никого нет — удаляем комнату из памяти сервера
-                if (room.players.length === 0) {
-                    delete roomsSpy[roomId];
-                } else {
-                    // Иначе обновляем лобби для оставшихся игроков
-                    io.to(roomId).emit('spy-update-lobby', {
-                        players: room.players,
-                        gameStarted: room.gameStarted
-                    });
-                }
-            }
+    // // ГОЛОСОВАНИЕ
+    socket.on('spy-cast-vote', ({ roomId, targetId }) => {
+        const room = roomsSpy[roomId];
+        if (!room) return;
+        room.votes[targetId] = (room.votes[targetId] || 0) + 1;
+
+        if (Object.values(room.votes).reduce((a, b) => a + b, 0) >= room.players.length) {
+            calculateResults(io, roomId);
+        }
+    });
+
+    // // ВЫХОД
+    socket.on('disconnect', () => {
+        for (const rid in roomsSpy) {
+            roomsSpy[rid].players = roomsSpy[rid].players.filter(p => p.id !== socket.id);
+            io.to(rid).emit('spy-update-lobby', { roomId: rid, players: roomsSpy[rid].players });
         }
     });
 };
+
+function startVoting(io, roomId) {
+    const room = roomsSpy[roomId];
+    room.status = 'VOTING';
+    io.to(roomId).emit('spy-start-voting', room.players);
+}
+
+function calculateResults(io, roomId) {
+    const room = roomsSpy[roomId];
+    const sortedVotes = Object.entries(room.votes).sort((a,b) => b[1] - a[1]);
+    const mostVotedId = sortedVotes[0][0];
+    const spyWin = !room.spies.includes(mostVotedId);
+
+    io.to(roomId).emit('spy-results', {
+        spyWin,
+        location: room.location,
+        votes: room.votes,
+        players: room.players,
+        spies: room.spies
+    });
+    delete roomsSpy[roomId]; // Очистка комнаты
+}
