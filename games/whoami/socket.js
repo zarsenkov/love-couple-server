@@ -12,7 +12,9 @@ module.exports = (io, socket) => {
                 gameStarted: false,
                 activeIdx: 0,
                 gamePool: [],
-                timerVal: 90
+                timerVal: 90,
+                maxRounds: 3,
+                currentRound: 1
             };
         }
 
@@ -32,17 +34,19 @@ module.exports = (io, socket) => {
     });
 
     // 2. Старт игры (Хост)
-    socket.on('whoami-start', ({ roomId, words, timer }) => {
-        const room = roomsWhoAmI[roomId];
-        if (room) {
-            room.gameStarted = true;
-            room.gamePool = words;
-            room.timerVal = timer || 90;
-            room.activeIdx = 0;
-            // Передаем true, так как это старт хода первого игрока
-            sendWhoAmITurn(io, roomId, true);
-        }
-    });
+socket.on('whoami-start', ({ roomId, words, timer, rounds }) => {
+    const room = roomsWhoAmI[roomId];
+    if (room) {
+        room.gameStarted = true;
+        room.gamePool = words;
+        room.timerVal = parseInt(timer) || 90;
+        room.maxRounds = parseInt(rounds) || 3; // Установка раундов
+        room.currentRound = 1;
+        room.activeIdx = 0;
+        room.players.forEach(p => p.score = 0); // Сброс очков перед новой игрой
+        sendWhoAmITurn(io, roomId, true);
+    }
+});
 
     // 3. Действие: "Угадал" или "Пас"
     socket.on('whoami-action', ({ roomId, isCorrect }) => {
@@ -57,14 +61,25 @@ module.exports = (io, socket) => {
     });
 
     // 4. Время вышло — переход хода
-    socket.on('whoami-timeout', (roomId) => {
-        const room = roomsWhoAmI[roomId];
-        if (room && room.gameStarted) {
+socket.on('whoami-timeout', (roomId) => {
+    const room = roomsWhoAmI[roomId];
+    if (room && room.gameStarted) {
+        // Если сходил последний игрок в списке — круг (раунд) завершен
+        if (room.activeIdx === room.players.length - 1) {
+            room.currentRound++;
+        }
+
+        if (room.currentRound > room.maxRounds) {
+            // ИГРА ОКОНЧЕНА
+            room.gameStarted = false;
+            io.to(`whoami_${roomId}`).emit('whoami-game-over', { players: room.players });
+        } else {
+            // СЛЕДУЮЩИЙ ИГРОК
             room.activeIdx = (room.activeIdx + 1) % room.players.length;
-            // Передаем true, так как ход перешел к новому игроку
             sendWhoAmITurn(io, roomId, true);
         }
-    });
+    }
+});
 
     // 5. Выход из комнаты
     socket.on('whoami-leave', (roomId) => {
@@ -102,6 +117,8 @@ function sendWhoAmITurn(io, roomId, isNewPlayer = false) {
         activePlayerName: activePlayer.name,
         word: currentWord,
         timer: room.timerVal,
+        round: room.currentRound,
+        totalRounds: room.maxRounds,
         isNewPlayer: isNewPlayer
     });
 }
