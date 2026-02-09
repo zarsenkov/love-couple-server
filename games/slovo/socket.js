@@ -1,24 +1,17 @@
-const express = require('express');
-const http = require('http');
-const { Server } = require('socket.io');
-const path = require('path');
-
-const app = express();
-const server = http.createServer(app);
-const io = new Server(server);
-
-app.use(express.static(path.join(__dirname, 'public')));
-
+// Хранилище комнат (вне функции, чтобы данные сохранялись между подключениями)
 const rooms = new Map();
 
-// Те же слова и алфавит, что в оффлайн версии
-const words = ["Телефон", "Свидание", "Борщ", "Отпуск", "Шоколад", "Космос", "Ремонт", "Свадьба", "Гитара", "Сюрприз", "Мечта", "Паспорт", "Наушники", "Зеркало"];
+const words = [
+    "Телефон", "Свидание", "Борщ", "Отпуск", "Шоколад", "Космос", "Ремонт", "Свадьба",
+    "Гитара", "Сюрприз", "Мечта", "Паспорт", "Наушники", "Зеркало", "Акула", "Арбуз",
+    "Банан", "Билет", "Ваза", "Вокзал", "Глобус", "Дорога", "Звезда", "Йогурт"
+];
 const alphabet = "АБВГДЕЖЗИКЛМНОПРСТУФХЦЧШ";
 
-io.on('connection', (socket) => {
-    console.log('User connected:', socket.id);
+module.exports = (io, socket) => {
 
-    socket.on('create_room', (playerName) => {
+    // Создание комнаты
+    socket.on('slovo-create', (playerName) => {
         const roomId = Math.random().toString(36).substring(2, 6).toUpperCase();
         const room = {
             id: roomId,
@@ -30,21 +23,26 @@ io.on('connection', (socket) => {
         };
         rooms.set(roomId, room);
         socket.join(roomId);
-        socket.emit('room_data', room);
+        socket.emit('slovo-room-data', room);
+        console.log(`[SLOVO] Room ${roomId} created by ${playerName}`);
     });
 
-    socket.on('join_room', ({ roomId, playerName }) => {
-        const room = rooms.get(roomId.toUpperCase());
+    // Вход в комнату
+    socket.on('slovo-join', ({ roomId, playerName }) => {
+        const cleanId = roomId.toUpperCase().trim();
+        const room = rooms.get(cleanId);
+        
         if (room && room.status === 'lobby') {
             room.players.push({ id: socket.id, name: playerName, score: 0 });
-            socket.join(room.id);
-            io.to(room.id).emit('room_data', room);
+            socket.join(cleanId);
+            io.to(cleanId).emit('slovo-room-data', room);
         } else {
-            socket.emit('error', 'Комната не найдена или игра уже идет');
+            socket.emit('slovo-error', 'Комната не найдена или игра уже идет');
         }
     });
 
-    socket.on('start_game', (roomId) => {
+    // Старт игры (только хост)
+    socket.on('slovo-start', (roomId) => {
         const room = rooms.get(roomId);
         if (room && room.players[0].id === socket.id) {
             room.status = 'playing';
@@ -52,7 +50,8 @@ io.on('connection', (socket) => {
         }
     });
 
-    socket.on('score_update', ({ roomId, isWin }) => {
+    // Обновление счета
+    socket.on('slovo-score-update', ({ roomId, isWin }) => {
         const room = rooms.get(roomId);
         if (room && room.players[room.currentTurn].id === socket.id) {
             if (isWin) room.players[room.currentTurn].score++;
@@ -65,16 +64,17 @@ io.on('connection', (socket) => {
         if (!room) return;
 
         room.timer = 60;
-        io.to(roomId).emit('new_turn', {
+        io.to(roomId).emit('slovo-new-turn', {
             activePlayer: room.players[room.currentTurn],
             index: room.currentTurn
         });
         
         sendCard(roomId);
 
+        if (room.timerId) clearInterval(room.timerId);
         room.timerId = setInterval(() => {
             room.timer--;
-            io.to(roomId).emit('timer_tick', room.timer);
+            io.to(roomId).emit('slovo-timer-tick', room.timer);
             if (room.timer <= 0) {
                 clearInterval(room.timerId);
                 endTurn(roomId);
@@ -84,15 +84,15 @@ io.on('connection', (socket) => {
 
     function sendCard(roomId) {
         const room = rooms.get(roomId);
+        if (!room) return;
         const randomWord = words[Math.floor(Math.random() * words.length)];
         const randomLetter = alphabet[Math.floor(Math.random() * alphabet.length)];
         
-        // Отправляем слово только текущему игроку, остальным только букву
         room.players.forEach((p, idx) => {
             if (idx === room.currentTurn) {
-                io.to(p.id).emit('card_update', { word: randomWord, letter: randomLetter });
+                io.to(p.id).emit('slovo-card-update', { word: randomWord, letter: randomLetter });
             } else {
-                io.to(p.id).emit('card_update', { word: '???', letter: randomLetter });
+                io.to(p.id).emit('slovo-card-update', { word: '???', letter: randomLetter });
             }
         });
     }
@@ -106,21 +106,8 @@ io.on('connection', (socket) => {
             startTurn(roomId);
         } else {
             room.status = 'results';
-            io.to(roomId).emit('game_over', room.players);
+            io.to(roomId).emit('slovo-game-over', room.players);
             rooms.delete(roomId);
         }
     }
-
-    socket.on('disconnect', () => {
-        // Простая очистка комнат при выходе
-        rooms.forEach((room, id) => {
-            if (room.players.some(p => p.id === socket.id)) {
-                clearInterval(room.timerId);
-                rooms.delete(id);
-                io.to(id).emit('error', 'Игрок покинул игру. Комната удалена.');
-            }
-        });
-    });
-});
-
-server.listen(3000, () => console.log('Server running on port 3000'));
+};
