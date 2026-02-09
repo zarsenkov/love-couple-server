@@ -1,88 +1,76 @@
-// Объект комнат: { roomId: { players, location, spies, votes, readyCount, status } }
-const roomsSpy = {};
-const LOCATIONS = ["БАНК", "БОЛЬНИЦА", "ЦИРК", "ОТЕЛЬ", "ШКОЛА", "САМОЛЕТ", "ПИРАТСКИЙ КОРАБЛЬ", "ТЕАТР", "РЕСТОРАН"];
+const spyRooms = new Map();
 
-module.exports = function(io, socket) {
-    // // 1. ВХОД В КОМНАТУ
-    socket.on('spy-join', ({ roomId, playerName }) => {
-        if (!roomsSpy[roomId]) {
-            roomsSpy[roomId] = { 
-                roomId, players: [], status: 'LOBBY', readyCount: 0, 
-                location: '', spies: [], votes: {} 
-            };
-        }
-        const room = roomsSpy[roomId];
-        const isHost = room.players.length === 0;
-        
-        room.players.push({ id: socket.id, name: playerName, isHost });
+// Список локаций
+const LOCATIONS = [
+    "Орбитальная станция", "Овощебаза", "Подводная лодка", "Киностудия", 
+    "Партизанский отряд", "Больница", "Цирк-шапито", "Казино", 
+    "Школа", "Пиратский корабль", "Полицейский участок", "Театр",
+    "Самолет", "Супермаркет", "Банк", "Отель", "Воинская часть"
+];
+
+module.exports = (io, socket) => {
+    
+    socket.on('spy_create', ({ playerName }) => {
+        const roomId = Math.random().toString(36).substring(2, 7).toUpperCase();
+        const room = {
+            id: roomId,
+            hostId: socket.id,
+            state: 'lobby',
+            players: [{ id: socket.id, name: playerName, role: '', isHost: true }],
+            location: '',
+            settings: { time: 480 } // 8 минут по умолчанию
+        };
+        spyRooms.set(roomId, room);
         socket.join(roomId);
-        io.to(roomId).emit('spy-update-lobby', { roomId, players: room.players });
+        socket.emit('spy_created', { roomId, players: room.players });
     });
 
-    // // 2. ЗАПРОС РОЛЕЙ (ОТ ХОСТА)
-    socket.on('spy-start-request', (roomId) => {
-        const room = roomsSpy[roomId];
-        if (!room || room.players.length < 3) return; // Минимум 3 игрока
-
-        room.status = 'READY_CHECK';
-        room.readyCount = 0;
-        room.location = LOCATIONS[Math.floor(Math.random() * LOCATIONS.length)];
-        
-        // Расчет шпионов: 1 на 3-5 чел, 2 на 6+
-        const spyCount = room.players.length >= 6 ? 2 : 1;
-        const shuffled = [...room.players].sort(() => 0.5 - Math.random());
-        room.spies = shuffled.slice(0, spyCount).map(p => p.id);
-
-        room.players.forEach(p => {
-            const isSpy = room.spies.includes(p.id);
-            io.to(p.id).emit('spy-init-roles', {
-                role: isSpy ? "ШПИОН" : "ЖИТЕЛЬ",
-                location: isSpy ? "???" : room.location,
-                isSpy
-            });
-        });
-    });
-
-    // // 3. ИГРОК ПРОЧИТАЛ РОЛЬ
-    socket.on('spy-player-ready', (roomId) => {
-        const room = roomsSpy[roomId];
-        if (!room) return;
-        room.readyCount++;
-        io.to(roomId).emit('spy-ready-update', { ready: room.readyCount, total: room.players.length });
-
-        if (room.readyCount >= room.players.length) {
-            room.status = 'INGAME';
-            io.to(roomId).emit('spy-game-begin', 300); // 5 минут
+    socket.on('spy_join', ({ roomId, playerName }) => {
+        const id = roomId?.toUpperCase().trim();
+        const room = spyRooms.get(id);
+        if (room && room.state === 'lobby') {
+            room.players.push({ id: socket.id, name: playerName, role: '', isHost: false });
+            socket.join(id);
+            io.to(id).emit('spy_update', room);
+            socket.emit('spy_created', { roomId: id, players: room.players });
+        } else {
+            socket.emit('error_msg', 'Комната не найдена');
         }
     });
 
-    // // 4. ГОЛОСОВАНИЕ
-    socket.on('spy-cast-vote', ({ roomId, targetId }) => {
-        const room = roomsSpy[roomId];
-        if (!room) return;
-        room.votes[targetId] = (room.votes[targetId] || 0) + 1;
-
-        // Если все проголосовали
-        const totalVotes = Object.values(room.votes).reduce((a, b) => a + b, 0);
-        if (totalVotes >= room.players.length) {
-            const sorted = Object.entries(room.votes).sort((a,b) => b[1] - a[1]);
-            const mostVotedId = sorted[0][0];
-            const spyWin = !room.spies.includes(mostVotedId);
-
-            io.to(roomId).emit('spy-results', {
-                spyWin, location: room.location, votes: room.votes,
-                players: room.players, spies: room.spies
+    socket.on('spy_start', (roomId) => {
+        const room = spyRooms.get(roomId);
+        if (room && room.hostId === socket.id && room.players.length >= 3) {
+            room.state = 'playing';
+            
+            // Выбираем локацию
+            room.location = LOCATIONS[Math.floor(Math.random() * LOCATIONS.length)];
+            
+            // Выбираем шпиона
+            const spyIdx = Math.floor(Math.random() * room.players.length);
+            
+            room.players.forEach((p, i) => {
+                p.role = (i === spyIdx) ? 'spy' : 'civilian';
             });
-            delete roomsSpy[roomId]; // Конец игры - удаляем комнату
+
+            io.to(roomId).emit('spy_game_start', { 
+                location: room.location, 
+                players: room.players,
+                time: room.settings.time 
+            });
+        } else {
+            socket.emit('error_msg', 'Нужно минимум 3 игрока');
         }
     });
 
-    // // 5. ОТКЛЮЧЕНИЕ
     socket.on('disconnect', () => {
-        for (const rid in roomsSpy) {
-            roomsSpy[rid].players = roomsSpy[rid].players.filter(p => p.id !== socket.id);
-            io.to(rid).emit('spy-update-lobby', { roomId: rid, players: roomsSpy[rid].players });
-            if(roomsSpy[rid].players.length === 0) delete roomsSpy[rid];
-        }
+        spyRooms.forEach((room, roomId) => {
+            const idx = room.players.findIndex(p => p.id === socket.id);
+            if (idx !== -1) {
+                room.players.splice(idx, 1);
+                if (room.players.length === 0) spyRooms.delete(roomId);
+                else io.to(roomId).emit('spy_update', room);
+            }
+        });
     });
 };
