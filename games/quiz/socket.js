@@ -1,139 +1,120 @@
-// love-couple-server/games/quiz/socket.js
+// Хранилище комнат
+const quizRooms = new Map();
 
-const roomsQuiz = {};
+// Пример вопросов (в реальности можно брать из БД)
+const QUESTIONS = [
+    { q: "Какая планета самая большая в Солнечной системе?", a: ["Марс", "Венера", "Юпитер", "Сатурн"], c: 2 },
+    { q: "Кто написал 'Преступление и наказание'?", a: ["Толстой", "Достоевский", "Чехов", "Пушкин"], c: 1 },
+    { q: "В какой стране находится Эйфелева башня?", a: ["Италия", "Германия", "Франция", "Испания"], c: 2 }
+];
 
 module.exports = (io) => {
     io.on('connection', (socket) => {
 
-        // 1. Создание комнаты
-        socket.on('quiz-create', ({ name }) => {
-            const roomId = Math.random().toString(36).substring(2, 7).toUpperCase();
-            roomsQuiz[roomId] = {
-                id: roomId,
-                host: socket.id,
-                players: [{ id: socket.id, name, score: 0, isHost: true }],
-                categories: [],
-                phase: 'lobby',
-                currentPlayerIdx: 0,
-                questionCount: 0,
-                timer: null,
-                currentQuestions: []
+        socket.on('quiz_create', ({ name }) => {
+            const roomId = Math.random().toString(36).substring(2, 6).toUpperCase();
+            const room = {
+                roomId,
+                hostId: socket.id,
+                players: [{ id: socket.id, name, score: 0, lastAnswer: null, isCorrect: false }],
+                status: 'lobby',
+                currentQuestion: 0,
+                timer: 15
             };
+            quizRooms.set(roomId, room);
             socket.join(roomId);
-            socket.emit('quiz-room-joined', { roomId, isHost: true });
-            io.to(roomId).emit('quiz-update-players', roomsQuiz[roomId].players);
+            socket.emit('room_data', room);
         });
 
-        // 2. Вход в комнату
-        socket.on('quiz-join', ({ name, roomId }) => {
-            const room = roomsQuiz[roomId];
-            if(!room) return socket.emit('error', 'Комната не найдена');
-            
-            room.players.push({ id: socket.id, name, score: 0, isHost: false });
-            socket.join(roomId);
-            socket.emit('quiz-room-joined', { roomId, isHost: false });
-            io.to(roomId).emit('quiz-update-players', room.players);
-        });
-
-        // 3. Запрос старта (от хоста)
-        socket.on('quiz-start-request', ({ roomId, categories }) => {
-            const room = roomsQuiz[roomId];
-            if(!room || socket.id !== room.host) return;
-
-            room.categories = categories;
-            room.phase = 'prep';
-            room.currentPlayerIdx = 0;
-            
-            startPrepPhase(roomId);
-        });
-
-        // 4. Логика фазы подготовки
-        function startPrepPhase(roomId) {
-            const room = roomsQuiz[roomId];
-            const activePlayer = room.players[room.currentPlayerIdx];
-            
-            io.to(roomId).emit('quiz-prep-phase', {
-                activePlayerId: activePlayer.id,
-                activePlayerName: activePlayer.name
-            });
-        }
-
-        // 5. Игрок нажал "Я готов"
-        socket.on('quiz-player-ready', ({ roomId }) => {
-            const room = roomsQuiz[roomId];
-            if(!room) return;
-
-            // Генерируем пачку вопросов для этого игрока (5 штук)
-            // Здесь предполагается, что QUIZ_QUESTIONS доступен на сервере или передан
-            room.questionCount = 0;
-            sendNextQuestion(roomId);
-        });
-
-        // 6. Отправка вопроса и запуск таймера
-        function sendNextQuestion(roomId) {
-            const room = roomsQuiz[roomId];
-            if(room.questionCount >= 5) {
-                room.currentPlayerIdx++;
-                if(room.currentPlayerIdx >= room.players.length) {
-                    return io.to(roomId).emit('quiz-results', room.players);
-                }
-                return startPrepPhase(roomId);
+        socket.on('quiz_join', ({ name, roomId }) => {
+            const room = quizRooms.get(roomId);
+            if (room && room.status === 'lobby') {
+                room.players.push({ id: socket.id, name, score: 0, lastAnswer: null, isCorrect: false });
+                socket.join(roomId);
+                io.to(roomId).emit('room_data', room);
+            } else {
+                socket.emit('error', 'Комната не найдена или игра уже идет');
             }
-
-            // Выбор случайного вопроса (упрощенно)
-            const q = { question: "Пример вопроса?", answers: ["A","B","C","D"], correct: 1 }; 
-            room.currentQuestion = q;
-            room.timeLeft = 30;
-
-            io.to(roomId).emit('quiz-question', {
-                question: q,
-                score: room.players[room.currentPlayerIdx].score,
-                activePlayerName: room.players[room.currentPlayerIdx].name
-            });
-
-            // Таймер
-            if(room.timer) clearInterval(room.timer);
-            room.timer = setInterval(() => {
-                room.timeLeft--;
-                io.to(roomId).emit('quiz-timer-tick', room.timeLeft);
-                if(room.timeLeft <= 0) {
-                    processAnswer(roomId, -1);
-                }
-            }, 1000);
-        }
-
-        // 7. Обработка ответа
-        socket.on('quiz-answer', ({ roomId, answerIdx }) => {
-            processAnswer(roomId, answerIdx);
         });
 
-        function processAnswer(roomId, answerIdx) {
-            const room = roomsQuiz[roomId];
-            if(!room || !room.timer) return;
-
-            clearInterval(room.timer);
-            room.timer = null;
-
-            const isCorrect = answerIdx === room.currentQuestion.correct;
-            if(isCorrect) {
-                room.players[room.currentPlayerIdx].score += (10 + Math.floor(room.timeLeft / 2));
+        socket.on('quiz_start_request', ({ roomId }) => {
+            const room = quizRooms.get(roomId);
+            if (room && room.hostId === socket.id) {
+                room.status = 'playing';
+                io.to(roomId).emit('game_start');
+                sendQuestion(io, roomId);
             }
+        });
 
-            io.to(roomId).emit('quiz-answer-result', {
-                sentIdx: answerIdx,
-                correctIdx: room.currentQuestion.correct,
-                isCorrect
-            });
+        socket.on('quiz_submit_answer', ({ roomId, answerIndex }) => {
+            const room = quizRooms.get(roomId);
+            if (!room) return;
 
-            setTimeout(() => {
-                room.questionCount++;
-                sendNextQuestion(roomId);
-            }, 2000);
-        }
-
-        // Удаление комнаты при выходе
-        socket.on('disconnect', () => {
-            // Логика очистки комнат
+            const player = room.players.find(p => p.id === socket.id);
+            if (player && player.lastAnswer === null) {
+                player.lastAnswer = answerIndex;
+                const correctIdx = QUESTIONS[room.currentQuestion].c;
+                if (answerIndex === correctIdx) {
+                    player.isCorrect = true;
+                    // Бонус за время (чем больше времени осталось, тем больше очков)
+                    player.score += 10 + Math.floor(room.timer);
+                }
+            }
         });
     });
 };
+
+function sendQuestion(io, roomId) {
+    const room = quizRooms.get(roomId);
+    if (!room) return;
+
+    const question = QUESTIONS[room.currentQuestion];
+    io.to(roomId).emit('next_question', {
+        question: question.q,
+        answers: question.a,
+        index: room.currentQuestion,
+        total: QUESTIONS.length
+    });
+
+    room.timer = 15;
+    const interval = setInterval(() => {
+        room.timer--;
+        io.to(roomId).emit('timer_tick', room.timer);
+
+        if (room.timer <= 0) {
+            clearInterval(interval);
+            endRound(io, roomId);
+        }
+    }, 1000);
+}
+
+function endRound(io, roomId) {
+    const room = quizRooms.get(roomId);
+    const correctIdx = QUESTIONS[room.currentQuestion].c;
+
+    const results = room.players.map(p => ({
+        id: p.id,
+        isCorrect: p.isCorrect,
+        lastAnswer: p.lastAnswer,
+        totalScore: p.score
+    }));
+
+    io.to(roomId).emit('round_ended', {
+        correctIndex: correctIdx,
+        playerResults: results
+    });
+
+    // Сброс временных данных
+    room.players.forEach(p => { p.lastAnswer = null; p.isCorrect = false; });
+
+    setTimeout(() => {
+        room.currentQuestion++;
+        if (room.currentQuestion < QUESTIONS.length) {
+            sendQuestion(io, roomId);
+        } else {
+            const finalResults = room.players.map(p => ({ name: p.name, score: p.score }));
+            io.to(roomId).emit('game_over', finalResults);
+            quizRooms.delete(roomId);
+        }
+    }, 4000); // 4 секунды на просмотр правильного ответа
+}
